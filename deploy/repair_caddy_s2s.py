@@ -23,20 +23,52 @@ class RepairError(Exception):
 def docker(*args, data=None):
     result = subprocess.run(['docker', *args], input=data, capture_output=True, timeout=30)
     if result.returncode:
-        raise RepairError('Docker/Caddy command failed; raw output withheld.')
+        error = result.stderr.lower()
+        category = 'COMMAND_FAILED'
+        for fragment, code in [
+                (b'open -:', 'STDIN_CONFIG_UNSUPPORTED'),
+                (b'permission denied', 'PERMISSION_DENIED'),
+                (b'no such file', 'FILE_NOT_FOUND'),
+                (b'unrecognized directive', 'UNRECOGNIZED_DIRECTIVE'),
+                (b'unknown flag', 'UNSUPPORTED_FLAG'),
+                (b'parsing caddyfile', 'CONFIG_PARSE_ERROR')]:
+            if fragment in error:
+                category = code
+                break
+        raise RepairError('exit_code=' + str(result.returncode) + '; category=' + category)
     return result.stdout
 
 
 def execute(*args, data=None):
-    return docker('exec', '-i', '-w', '/etc/caddy', 'caddy', *args, data=data)
+    try:
+        return docker('exec', '-i', '-w', '/etc/caddy', 'caddy', *args, data=data)
+    except RepairError as error:
+        stage = args[1] if args[0] == 'caddy' and args[1] in {'adapt', 'validate', 'reload'} else 'container_io'
+        raise RepairError('stage=' + stage + '; ' + str(error)) from None
 
 
 def active_config():
     return json.loads(execute('wget', '-qO-', 'http://127.0.0.1:2019/config/'))
 
 
+def config_command(command, data, adapter=None):
+    # Older installed Caddy versions may treat --config - as a literal filename.
+    # Use private container temp files rather than relying on stdin CLI support.
+    name = execute('mktemp', '/tmp/s2s-caddy-XXXXXX').strip().decode('ascii')
+    if not re.fullmatch(r'/tmp/s2s-caddy-[A-Za-z0-9]+', name):
+        raise RepairError('Unexpected temporary config path; stopped.')
+    try:
+        execute('sh', '-c', 'cat > "$1"', 's2s-config', name, data=data)
+        args = ('caddy', command, '--config', name)
+        if adapter:
+            args += ('--adapter', adapter)
+        return execute(*args)
+    finally:
+        execute('rm', '-f', name)
+
+
 def adapt(data):
-    return json.loads(execute('caddy', 'adapt', '--config', '-', '--adapter', 'caddyfile', data=data))
+    return json.loads(config_command('adapt', data, 'caddyfile'))
 
 
 def prepare(disk, snippet, active, adapter):
@@ -74,7 +106,7 @@ def main():
     candidate = prepare(disk, snippet, before, adapt)
     print('only_s2s_change_verified=true', flush=True)
     encoded = json.dumps(candidate).encode()
-    execute('caddy', 'validate', '--config', '-', data=encoded)
+    config_command('validate', encoded)
     backup = Path(tempfile.mkdtemp(prefix='s2s-config-backup-', dir='/opt/caddy'))
     (backup / 'host.Caddyfile').write_bytes(disk)
     (backup / 'mounted.Caddyfile').write_bytes(mounted)
@@ -88,14 +120,16 @@ def main():
         execute('sh', '-c', 'cat > /etc/caddy/Caddyfile', data=disk)
         if HOST.read_bytes() != disk or execute('cat', MOUNT) != disk:
             raise RepairError('Mounted file synchronization failed.')
-        # Use stdin so reload cannot silently read an older mounted file.
-        execute('caddy', 'reload', '--config', '-', data=encoded)
+        # Load the verified snapshot, never an older mounted file.
+        config_command('reload', encoded)
         if active_config() != candidate:
             raise RepairError('Active configuration verification failed.')
-    except (RepairError, OSError, ValueError, subprocess.TimeoutExpired):
+    except (RepairError, OSError, ValueError, subprocess.TimeoutExpired) as failure:
+        if isinstance(failure, RepairError):
+            print('repair_failure=' + str(failure), flush=True)
         try:
             execute('sh', '-c', 'cat > /etc/caddy/Caddyfile', data=mounted)
-            execute('caddy', 'reload', '--config', '-', data=json.dumps(before).encode())
+            config_command('reload', json.dumps(before).encode())
             print('repair_rolled_back=true', flush=True)
         except (RepairError, OSError, subprocess.TimeoutExpired):
             print('repair_rollback_unconfirmed=true; administrator must use the printed backup', flush=True)

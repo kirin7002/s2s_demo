@@ -75,12 +75,16 @@ ssh -t -F /Users/kirin/go_path/jev_demo/.run/server-management/ssh_config aliyun
 用户回传诊断确认`active_config_readable=true`，但目标路由、显式证书策略均不存在，
 49条JSON日志中目标域名出现0次；磁盘Caddyfile则有且只有一个目标站点。
 因此当前首先需要解决磁盘配置与运行配置不一致，再验收证书；尚不能据此认定ACME失败原因。
-可能存在旧的单文件Docker挂载，需修复输出`mounted_file_matches_host`进一步确认。
+修复输出`mounted_file_matches_host=false`确认容器挂载内容与宿主文件不同。
+首次管理员修复在配置适配阶段退出，尚未输出`only_s2s_change_verified`，没有修改配置。
+原错误提示未保留阶段，已增加固定阶段/退出码/错误类别，仍不输出原始stderr。
 
 已准备[管理员修复脚本](../deploy/repair_caddy_s2s.py)，上传到同一staging目录。
 它先验证“磁盘配置移除原样S2S站点后”与当前运行配置完全一致，否则停止；
 然后备份宿主文件、容器挂载文件及运行JSON到root专用0700目录，文件0600。
-同步已有挂载文件，通过stdin加载已验证的配置，并核验实际运行JSON。
+同步已有挂载文件，通过容器内0600临时文件加载已验证的配置，并核验实际运行JSON。
+临时文件使用后删除；避免依赖已安装Caddy对`--config -`的支持。
+目前尚不能确认首次适配失败就是stdin兼容问题，下一次失败会给出固定诊断类别。
 失败时恢复原挂载内容和原运行配置。无需重新构建或重启任何容器；
 重载仍可能关闭既有WebSocket连接，并启动此前已批准的目标站点LE证书申请。
 不读取应用.env、不调用模型。命令由用户在自己的终端输入sudo密码执行：
@@ -89,8 +93,9 @@ ssh -t -F /Users/kirin/go_path/jev_demo/.run/server-management/ssh_config aliyun
 ssh -t -F /Users/kirin/go_path/jev_demo/.run/server-management/ssh_config aliyun-kirin 'sudo python3 /home/kirin/apps/s2s_demo/staging/tls-diagnostics/repair_caddy_s2s.py --apply-approved-site && sudo bash /home/kirin/apps/s2s_demo/staging/tls-diagnostics/collect-caddy-tls.sh'
 ```
 
-本地13项诊断/修复测试通过，包括拒绝其他站点差异、同步旧挂载和重载失败回滚。
-尚未执行远端管理员修复，证书及公网访问仍待验证。
+本地16项诊断/修复测试通过，包括拒绝其他站点差异、同步旧挂载、重载失败回滚、
+临时文件清理和错误信息不暴露stderr秘密。远端首次管理员修复已安全停止，
+更新版尚未执行；证书及公网访问仍待验证。
 
 ## 先前准备与验收边界
 

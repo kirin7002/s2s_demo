@@ -14,7 +14,9 @@
 公网TLS仍报`TLSV1_ALERT_INTERNAL_ERROR`，HTTP外网出现`Non-compliance ICP Filing`拦截，尚未验收通过。
 增强诊断确认运行配置可读，但目标路由/证书策略不存在，49条JSON日志中目标出现0次；
 磁盘文件有目标站点，当前故障是磁盘与运行配置不一致。已准备带其他站点差异保护、备份与回滚的
-管理员修复脚本，13项模拟测试通过；尚未远端执行，详见[部署说明](deployment.md)。
+管理员修复脚本。首次远端执行确认`mounted_file_matches_host=false`，但配置适配失败，未作修改。
+更新版使用容器0600临时配置文件并增加固定错误阶段/类别，16项本地测试通过，
+尚待管理员执行，详见[部署说明](deployment.md)。
 用户已确认使用`s2s.kirinxu.cn`，DNS已指向服务器，证书尚未开通；新站点CA仅固定Let's Encrypt，
 不回退ZeroSSL且不修改其他站点。kirin不能免密sudo/管理Docker，
 用户已亲自填写远端`shared/.env`并通过激活校验；未复制本地秘密，未修改安全组/防火墙。

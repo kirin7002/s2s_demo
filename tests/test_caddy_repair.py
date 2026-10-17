@@ -38,7 +38,7 @@ class CaddyRepairTests(unittest.TestCase):
                 repair.prepare(disk, SNIPPET, ACTIVE, adapter)
 
     def exercise_main(self, fail_reload):
-        state = {'mounted': BASE, 'active': ACTIVE, 'failed': False}
+        state = {'mounted': BASE, 'active': ACTIVE, 'failed': False, 'temp': b''}
         with tempfile.TemporaryDirectory() as directory:
             host = Path(directory) / 'Caddyfile'
             host.write_bytes(DISK)
@@ -52,19 +52,24 @@ class CaddyRepairTests(unittest.TestCase):
                     {'Source': str(host), 'Destination': repair.MOUNT, 'RW': True}]}).encode()
 
             def execute(*args, data=None):
+                if args[0] == 'mktemp':
+                    return b'/tmp/s2s-caddy-fixture\n'
+                if args[0] == 'sh' and args[2] == 'cat > "$1"':
+                    state['temp'] = data
+                    return b''
                 if args[0] == 'cat':
                     return state['mounted']
                 if args[0] == 'wget':
                     return json.dumps(state['active']).encode()
                 if args[:2] == ('caddy', 'adapt'):
-                    return json.dumps(adapter(data)).encode()
+                    return json.dumps(adapter(state['temp'])).encode()
                 if args[0] == 'sh':
                     state['mounted'] = data
                 if args[:2] == ('caddy', 'reload'):
                     if fail_reload and not state['failed']:
                         state['failed'] = True
                         raise repair.RepairError('Synthetic failure')
-                    state['active'] = json.loads(data)
+                    state['active'] = json.loads(state['temp'])
                 return b''
 
             output = io.StringIO()
@@ -93,6 +98,35 @@ class CaddyRepairTests(unittest.TestCase):
         self.assertEqual(state['mounted'], BASE)
         self.assertEqual(state['active'], ACTIVE)
         self.assertIn('repair_rolled_back=true', output)
+
+    def test_real_file_path_replaces_stdin_for_older_caddy(self):
+        calls = []
+        def execute(*args, data=None):
+            calls.append((args, data))
+            return b'/tmp/s2s-caddy-fixture\n' if args[0] == 'mktemp' else b'{}'
+        with patch.object(repair, 'execute', execute):
+            repair.config_command('adapt', b'sensitive-config', 'caddyfile')
+        self.assertIn((('caddy', 'adapt', '--config', '/tmp/s2s-caddy-fixture', '--adapter', 'caddyfile'), None), calls)
+        self.assertEqual(calls[-1], (('rm', '-f', '/tmp/s2s-caddy-fixture'), None))
+
+    def test_temporary_config_is_removed_after_command_failure(self):
+        calls = []
+        def execute(*args, data=None):
+            calls.append(args)
+            if args[0] == 'caddy':
+                raise repair.RepairError('Synthetic failure')
+            return b'/tmp/s2s-caddy-fixture\n'
+        with patch.object(repair, 'execute', execute), self.assertRaises(repair.RepairError):
+            repair.config_command('adapt', b'sensitive-config', 'caddyfile')
+        self.assertEqual(calls[-1], ('rm', '-f', '/tmp/s2s-caddy-fixture'))
+
+    def test_command_error_reports_fixed_category_without_stderr_secrets(self):
+        result = type('Result', (), {'returncode': 1, 'stderr': b'open -: no such file; fake-secret'})()
+        with patch.object(repair.subprocess, 'run', return_value=result):
+            with self.assertRaisesRegex(repair.RepairError, 'STDIN_CONFIG_UNSUPPORTED') as caught:
+                repair.execute('caddy', 'adapt', '--config', '-')
+        self.assertIn('stage=adapt', str(caught.exception))
+        self.assertNotIn('fake-secret', str(caught.exception))
 
 
 if __name__ == '__main__':
