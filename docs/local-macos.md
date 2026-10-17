@@ -42,6 +42,29 @@ python3.12 -m venv .venv
 
 ## 真实对话仍需用户自行配置
 
+### 终端交互启动（无需把秘密写进命令）
+
+在自己的终端执行（已有 `.venv` 无需重新安装）：
+
+```sh
+/Users/kirin/go_path/s2s_demo/.venv/bin/python /Users/kirin/go_path/s2s_demo/scripts/start_live.py
+```
+
+按无回显提示亲自输入北京地域的 DashScope API Key 和自定演示登录口令；然后打开
+<http://127.0.0.1:8080>，使用该口令登录。脚本固定北京公共端点、
+`qwen-audio-3.0-realtime-plus`、`S2S_ENABLE_LIVE=1`，只监听 `127.0.0.1:8080`。
+凭据只保留在进程内存，不写文件、命令行参数、环境变量或日志，不从 Vault 读取。
+输入无需显示出来；不要通过管道、重定向或聊天传入。
+
+如果预览仍占用端口，脚本会在询问凭据前退出，不自动终止进程。
+可在预览原终端按 `Ctrl+C`，或在上述命令末尾加 `--stop-preview-pid <预览PID>`。
+这个显式选项只对命令、工作目录和环回监听端口均匹配本项目的指定 Python 进程发送
+`SIGTERM`；检查不通过即退出，不会强杀。PID 应使用当前预览的实际 PID。
+新的真实模式在当前终端前台运行，按 `Ctrl+C` 可靠停止；没有注册自启动。
+
+启动和登录不验证 Key 的真实性或模型权限；点击页面“开始”才发起真实模型连接，
+可能产生费用。请在接受费用风险后操作。脚本未代用户进行任何真实握手或付费测试。
+
 本次检查只确认本地终端未设置 `DASHSCOPE_API_KEY`、`S2S_DEMO_PASSWORD`，没有读取任何秘密值。
 用户自行在安全的运行环境中注入这两个变量；Key 应属于所选地域且有目标模型权限。
 默认 `QWEN_REGION=cn-beijing`、`QWEN_MODEL=qwen-audio-3.0-realtime-plus`，Audio 公共端点无需 `QWEN_WORKSPACE_ID`。
