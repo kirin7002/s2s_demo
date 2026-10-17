@@ -1,18 +1,21 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>S2S · 持续语音对话</title><link rel="stylesheet" href="/style.css"></head>
-<body><main>
-<header><span class="tag">车云一体 · 语音入口</span><span id="model">读取配置…</span><button id="logout">退出登录</button></header>
-<h1>随时开口，持续对话。</h1>
-<p class="intro">连接后直接说话，模型自动判断轮次。说话可打断回复，也可手动打断。</p>
-<section class="console" aria-label="语音会话">
-<div class="orb" aria-hidden="true">◉</div>
-<p id="status" role="status" aria-live="polite">未连接</p>
-<p id="detail">麦克风仅在开始后采集；停止即释放。</p>
-<div class="controls"><button id="start">开始对话</button><button id="interrupt" disabled>打断回复</button><button id="stop" disabled>停止</button></div>
-<p id="config" class="hint"></p>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#eef3f9"><title>S2S · 语音通话</title><link rel="stylesheet" href="/style.css"></head>
+<body class="call-page" data-call-state="idle"><main class="call-shell">
+<header class="call-header"><a class="brand" href="/chat" aria-label="S2S 语音通话"><span class="brand-mark" aria-hidden="true">s<span>2</span>s</span><span>语音通话</span></a><button id="logout" class="text-button">退出登录</button></header>
+<section class="call-identity" aria-label="通话状态">
+<div class="avatar" aria-hidden="true"><div class="voice-mark"><i></i><i></i><i></i><i></i><i></i></div></div>
+<h1>语音助手</h1><p id="model" class="model-name">S2S · 持续语音对话</p>
+<div class="call-status"><span class="status-dot" aria-hidden="true"></span><p id="status" role="status" aria-live="polite">等待接通</p><time id="duration" datetime="PT0S" hidden>00:00</time></div>
+<p id="detail">接通后，像打电话一样自然聊天。</p>
 </section>
-<section class="conversation"><div class="section-top"><h2>本次对话</h2><button id="clear">清空显示</button></div><div id="transcripts" role="log" aria-live="polite"><p class="empty">转写将在这里显示。</p></div></section>
-<footer>请使用耳机以减少回声。本演示未连接车控、工具或持久记忆。断线后点击重新连接将建立新会话。</footer>
-</main><script type="module" src="/app.js"></script></body></html>
+<section class="conversation" aria-labelledby="history-title"><div class="section-top"><h2 id="history-title">对话记录 <span>仅本次</span></h2><button id="clear" class="text-button" aria-label="清空对话显示"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5m4-5v5"/></svg>清空</button></div>
+<div id="transcripts" role="log" aria-label="本次对话记录" aria-live="polite" aria-relevant="additions text"><div class="empty"><div class="empty-icon" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M7 7h18v14H14l-7 5V7Z"/><path d="M12 12h8m-8 4h5"/></svg></div><p>从一句「你好」开始</p><span>接通后，对话文字会显示在这里。</span></div></div>
+</section>
+<section class="call-dock" aria-label="通话控制"><p id="config" class="connection-hint">正在读取服务配置…</p><div class="controls">
+<button id="mute" class="call-control secondary-control" aria-pressed="false" disabled><span class="control-disc"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-3 0h6"/><path class="mute-slash" d="m3 3 18 18"/></svg></span><span id="mute-label">静音</span></button>
+<div class="primary-control"><button id="start" class="call-control connect-control" aria-label="接通语音通话"><span class="control-disc"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3 3.5 5.5C2 11 13 22 18.5 20.5L21 19l-5-4-2 2c-3-1-6-4-7-7l2-2Z"/></svg></span><span id="start-label">接通</span></button><button id="stop" class="call-control hangup-control" aria-label="挂断语音通话" disabled hidden><span class="control-disc"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15v-4c5-4 13-4 18 0v4h-5v-3c-3-1-5-1-8 0v3Z"/></svg></span><span id="stop-label">挂断</span></button></div>
+<button id="interrupt" class="call-control secondary-control" aria-label="打断助手回复" disabled><span class="control-disc"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5v14M15 5v14"/></svg></span><span>打断</span></button>
+</div><p class="privacy-note"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2 4 5v5c0 4 6 7 6 7s6-3 6-7V5Z"/><path d="m7.5 9.5 1.5 1.5 3.5-4"/></svg>接通后才开启麦克风 · 挂断即关闭</p></section>
+</main><template id="empty-transcripts"><div class="empty"><div class="empty-icon" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M7 7h18v14H14l-7 5V7Z"/><path d="M12 12h8m-8 4h5"/></svg></div><p>从一句「你好」开始</p><span>接通后，对话文字会显示在这里。</span></div></template><script type="module" src="/app.js"></script></body></html>

@@ -99,3 +99,12 @@ cd /Users/kirin/go_path/s2s_demo
 
 程序现在支持自动加载本地 `.env`。不要将真实 Key 或口令放入命令行参数、仓库或聊天；网页登录仅输入演示口令。
 本次仅创建秘密字段为空的本地配置，没有创建云资源或执行付费模型调用。
+
+## 通话界面预览与浏览器回归（2026-10-18）
+
+新的通话界面已在独立`http://127.0.0.1:8081`启动禁用模型的本地预览，可点击“进入本地预览”。
+此进程由显式无Key、live=false的Config创建，不读取项目.env，不影响原8080进程；
+后续接续时先核验进程仍在，勿把端口可用等同于真实模型已验证。
+Mac浏览器回归现在优先使用已安装Chrome；可通过`S2S_TEST_BROWSER`指定其他Chromium路径。
+`.venv/bin/python -m unittest tests.test_browser -v`已通过14项实际浏览器测试，
+麦克风和上游均为本地fixture，不验证真实Safari/Android设备。

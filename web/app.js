@@ -1,9 +1,28 @@
 const el = id => document.getElementById(id);
 let current = null, generation = 0, config = null;
 let assistant = null;
-function status(title, detail = '') { el('status').textContent = title; el('detail').textContent = detail; }
+function status(title, detail = '', state) {
+  el('status').textContent = title; el('detail').textContent = detail;
+  if (state) document.body.dataset.callState = state;
+}
 function buttons(busy, ready = false) {
   el('start').disabled = busy; el('stop').disabled = !busy; el('interrupt').disabled = !ready;
+  el('start').hidden = busy; el('stop').hidden = !busy; el('mute').disabled = !ready;
+  el('stop-label').textContent = ready ? '挂断' : '取消';
+  el('stop').setAttribute('aria-label', ready ? '挂断语音通话' : '取消连接');
+  document.body.dataset.callState = ready ? 'listening' : busy ? 'connecting' : 'idle';
+  if (!busy) {
+    el('mute').setAttribute('aria-pressed', 'false'); el('mute-label').textContent = '静音';
+  }
+}
+function duration(s) {
+  if (s.startedAt === undefined) return;
+  const seconds = Math.max(0, Math.floor((performance.now() - s.startedAt) / 1000));
+  el('duration').textContent = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+  el('duration').setAttribute('datetime', `PT${seconds}S`);
+}
+function emptyConversation() {
+  el('transcripts').replaceChildren(el('empty-transcripts').content.cloneNode(true));
 }
 function flush(s) {
   for (const source of s.playing) { source.onended = null; try { source.stop(); } catch {} source.disconnect(); }
@@ -11,7 +30,7 @@ function flush(s) {
 }
 function dispose(s) {
   if (!s || s.disposed) return;
-  s.disposed = true; clearTimeout(s.timer); s.abort.abort(); flush(s);
+  s.disposed = true; clearTimeout(s.timer); clearInterval(s.clock); duration(s); s.abort.abort(); flush(s);
   if (s.capture) { s.capture.port.onmessage = null; s.capture.disconnect(); }
   s.source?.disconnect(); s.silent?.disconnect();
   s.stream?.getTracks().forEach(track => track.stop());
@@ -20,7 +39,10 @@ function dispose(s) {
 }
 function finish(s, title, detail) {
   dispose(s);
-  if (current === s) { current = null; buttons(false); status(title, detail); el('start').textContent = '重新连接'; }
+  if (current === s) {
+    current = null; buttons(false); status(title, detail);
+    el('start-label').textContent = '重新接通'; el('start').setAttribute('aria-label', '重新接通语音通话');
+  }
 }
 function transcript(role, text) {
   if (!text) return;
@@ -53,6 +75,7 @@ async function start() {
   if (current) return;
   const s = { id: ++generation, abort: new AbortController(), playing: new Set(), nextTime: 0, ready: false };
   current = s; assistant = null; buttons(true); status('准备连接', '正在检查配置…');
+  el('duration').hidden = true; el('duration').textContent = '00:00';
   const stale = () => current !== s || s.disposed;
   s.timer = setTimeout(() => finish(s, '连接超时', '可点击重新连接。'), 30000);
   try {
@@ -68,7 +91,7 @@ async function start() {
     if (stale()) return;
     if (!config.ready) throw new Error(config.message || '服务端尚未准备好。');
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) throw new Error('麦克风需要 HTTPS 或 localhost 安全页面。');
-    status('等待麦克风授权', '可随时点击停止取消；允许后才会发送音频。');
+    status('等待麦克风授权', '允许后开启麦克风；也可点击取消。');
     const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
     if (stale()) { stream.getTracks().forEach(track => track.stop()); return; }
     s.stream = stream;
@@ -86,7 +109,7 @@ async function start() {
     socket.binaryType = 'arraybuffer';
     status('正在建立会话', '等待模型确认音频配置…');
     s.capture.port.onmessage = event => {
-      if (stale() || !s.ready || socket.readyState !== WebSocket.OPEN) return;
+      if (stale() || !s.ready || s.muted || socket.readyState !== WebSocket.OPEN) return;
       if (socket.bufferedAmount + event.data.byteLength > 64000) { finish(s, '网络发送积压', '音频已停止，请重新连接。'); return; }
       socket.send(event.data);
     };
@@ -97,11 +120,14 @@ async function start() {
         const message = JSON.parse(event.data);
         switch (message.type) {
           case 'ready':
-            clearTimeout(s.timer); s.ready = true; buttons(true, true); status('正在聆听', '直接说话；停顿后模型自动回复。'); break;
-          case 'responding': assistant = null; s.suppressed = false; status('正在回复', '可开口或点击打断回复。'); break;
-          case 'interrupted': flush(s); s.suppressed = true; assistant = null; status('已打断，继续聆听', '可以继续说话。'); break;
-          case 'listening': status('正在聆听', '语音输入中…'); break;
-          case 'turn_done': assistant = null; status('继续聆听', '本轮生成结束，可以继续说话。'); break;
+            clearTimeout(s.timer); s.ready = true; buttons(true, true);
+            s.startedAt = performance.now(); duration(s); el('duration').hidden = false;
+            s.clock = setInterval(() => duration(s), 1000);
+            status('正在聆听', '直接说话，停顿后我会回应。', 'listening'); break;
+          case 'responding': assistant = null; s.suppressed = false; status('正在回复', '随时开口，或轻点打断。', 'responding'); break;
+          case 'interrupted': flush(s); s.suppressed = true; assistant = null; status('已打断，继续聆听', '可以继续说话。', 'listening'); break;
+          case 'listening': status('正在聆听', '我在听，请继续。', 'listening'); break;
+          case 'turn_done': assistant = null; status('继续聆听', '可以继续说话。', 'listening'); break;
           case 'transcript': transcript(message.role, message.text); break;
           case 'notice': el('detail').textContent = message.message; break;
           case 'error': finish(s, '会话错误', message.message); break;
@@ -120,14 +146,22 @@ el('start').onclick = start;
 el('stop').onclick = () => {
   const s = current;
   if (s?.socket?.readyState === WebSocket.OPEN) s.socket.send(JSON.stringify({ type: 'stop' }));
-  finish(s, '已停止', '麦克风与会话已关闭。');
+  finish(s, '通话已结束', '麦克风已关闭，随时可以重新接通。');
+};
+el('mute').onclick = () => {
+  const s = current;
+  if (!s?.ready || s.disposed) return;
+  s.muted = !s.muted;
+  s.stream.getAudioTracks().forEach(track => { track.enabled = !s.muted; });
+  el('mute').setAttribute('aria-pressed', String(s.muted));
+  el('mute-label').textContent = s.muted ? '取消静音' : '静音';
 };
 el('interrupt').onclick = () => {
   const s = current;
   if (!s?.ready || s.socket.readyState !== WebSocket.OPEN) return;
   flush(s); s.suppressed = true; s.socket.send(JSON.stringify({ type: 'interrupt' }));
 };
-el('clear').onclick = () => { el('transcripts').replaceChildren(); assistant = null; };
+el('clear').onclick = () => { emptyConversation(); assistant = null; };
 el('logout').onclick = async () => {
   if (current) finish(current, '已停止', '正在退出登录。');
   try {
@@ -142,6 +176,6 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden && current) finish(current, '页面已进入后台', '麦克风已释放，返回后可重新连接。');
 });
 fetch('/api/config').then(r => r.json()).then(c => {
-  config = c; el('model').textContent = `${c.model} · ${c.region}`;
-  el('config').textContent = c.ready ? '服务配置已就绪。开始将连接真实模型。' : c.message;
+  config = c; el('model').textContent = c.model === 'qwen-audio-3.0-realtime-flash' ? 'Qwen Audio · Flash' : c.model;
+  el('config').textContent = c.ready ? '轻点接通，开始语音对话' : c.message;
 }).catch(() => { el('config').textContent = '无法读取服务配置。'; });

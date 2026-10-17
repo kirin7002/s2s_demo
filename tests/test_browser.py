@@ -4,6 +4,9 @@ Permission denial/pending prompts and system audio interruption are injected.
 This is not physical Safari/iOS or real-model validation.
 """
 import asyncio
+import os
+from pathlib import Path
+import sys
 import unittest
 from playwright.async_api import async_playwright
 from tests.test_gateway import Harness
@@ -40,7 +43,11 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.h = await Harness().open()
         self.h.mode = "turns"
         self.pw = await async_playwright().start()
-        self.browser = await self.pw.chromium.launch(executable_path="/usr/bin/chromium", args=["--no-sandbox", "--use-fake-device-for-media-stream"])
+        browser_path = os.environ.get('S2S_TEST_BROWSER')
+        if not browser_path:
+            candidate = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' if sys.platform == 'darwin' else '/usr/bin/chromium'
+            browser_path = candidate if Path(candidate).is_file() else None
+        self.browser = await self.pw.chromium.launch(executable_path=browser_path, args=["--no-sandbox", "--use-fake-device-for-media-stream"])
         self.context = await self.browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True, permissions=["microphone"])
         await self.context.add_init_script(MONITOR)
         self.page = await self.context.new_page()
@@ -194,6 +201,44 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.page.evaluate("window.__sources.length"), 1)
         await self.page.click("#stop")
         await self.released()
+
+    async def test_call_controls_timer_mute_and_history(self):
+        self.h.mode = 'normal'
+        self.assertTrue(await self.page.locator('#start').is_visible())
+        self.assertFalse(await self.page.locator('#stop').is_visible())
+        await self.page.click('#start')
+        await self.listening()
+        self.assertFalse(await self.page.locator('#start').is_visible())
+        self.assertTrue(await self.page.locator('#stop').is_visible())
+        await self.page.wait_for_function("() => document.getElementById('duration').textContent !== '00:00'")
+        await self.page.click('#mute')
+        self.assertEqual(await self.page.locator('#mute').get_attribute('aria-pressed'), 'true')
+        self.assertTrue(await self.page.evaluate("window.__streams[0].getAudioTracks().every(t => !t.enabled)"))
+        await asyncio.sleep(.25)
+        # Drain packets captured before muting; none should arrive while muted.
+        while not self.h.events.empty():
+            self.h.events.get_nowait()
+        await asyncio.sleep(.25)
+        self.assertTrue(self.h.events.empty())
+        await self.page.click('#mute')
+        self.assertTrue(await self.page.evaluate("window.__streams[0].getAudioTracks().every(t => t.enabled)"))
+        await self.h.upstreams[0].send_json({'type': 'response.audio_transcript.delta', 'delta': '本地对话记录'})
+        await self.page.wait_for_function("() => document.getElementById('transcripts').textContent.includes('本地对话记录')")
+        await self.page.click('#stop')
+        await self.released()
+        self.assertTrue(await self.page.locator('#start').is_visible())
+        self.assertTrue(await self.page.locator('#transcripts').get_by_text('本地对话记录').is_visible())
+        await self.page.click('#clear')
+        self.assertTrue(await self.page.locator('.empty').is_visible())
+        self.assertEqual(await self.page.locator('.utterance').count(), 0)
+
+    async def test_small_phone_and_desktop_keep_controls_visible(self):
+        for width, height in [(320, 568), (390, 844), (1440, 1000)]:
+            await self.page.set_viewport_size({'width': width, 'height': height})
+            self.assertFalse(await self.page.evaluate('document.documentElement.scrollWidth > innerWidth'))
+            box = await self.page.locator('#start').bounding_box()
+            self.assertLessEqual(box['y'] + box['height'], height)
+            self.assertGreaterEqual(box['width'], 44)
 
 
 if __name__ == "__main__":
