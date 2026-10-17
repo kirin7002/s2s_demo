@@ -3,6 +3,7 @@ import json
 import unittest
 
 from deploy.filter_caddy_tls import CA_URLS, DOMAIN, collect, filter_event
+from deploy.caddy_runtime_summary import summarize
 
 
 class TLSLogFilterTests(unittest.TestCase):
@@ -47,6 +48,25 @@ class TLSLogFilterTests(unittest.TestCase):
         events = collect(lines)
         self.assertEqual(len(events), 20)
         self.assertEqual(events[0]["msg"], "10")
+
+    def test_counts_explain_empty_filtered_output_without_exposing_logs(self):
+        stats = {}
+        events = collect(['console private', '{}', json.dumps({'logger': 'tls.obtain',
+                          'identifier': 'other.example', 'msg': 'private'})], stats)
+        self.assertEqual(events, [])
+        self.assertEqual(stats, dict(log_lines=3, json_lines=2, tls_lines=1, target_lines=0))
+
+    def test_runtime_summary_exposes_only_target_booleans(self):
+        config = {'private': 'fake-secret', 'apps': {'http': {'servers': {'srv0': {
+            'routes': [{'match': [{'host': [DOMAIN]}]}]}}}, 'tls': {'automation': {'policies': [
+                {'subjects': [DOMAIN], 'issuers': [{'module': 'acme',
+                 'ca': 'https://acme-v02.api.letsencrypt.org/directory', 'api_key': 'fake-secret'}]}]}}}}
+        result = summarize(config)
+        self.assertTrue(result['active_s2s_route_present'])
+        self.assertTrue(result['active_s2s_le_issuer_present'])
+        self.assertFalse(result['active_s2s_auto_https_disabled'])
+        self.assertTrue(all(isinstance(value, bool) for value in result.values()))
+        self.assertNotIn('fake-secret', json.dumps(result))
 
 
 if __name__ == "__main__":

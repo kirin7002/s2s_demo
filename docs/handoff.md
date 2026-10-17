@@ -9,11 +9,14 @@
 用户已授权阿里云部署。无秘密代码已准备在服务器`47.116.102.49`的
 `/home/kirin/apps/s2s_demo/releases/3f670692f010`；禁用模型的服务器启动检查通过。
 固定LE的新准备版目录为`/home/kirin/apps/s2s_demo/releases/20261018-le-only`，旧目录保留，
-后续应使用[部署说明](deployment.md)中的新激活命令。当前尚未激活或签发证书。
+用户已执行新激活命令，内部登录页HTTP200、Flash配置就绪，Caddy验证/reload完成。
+回滚备份`/opt/caddy/Caddyfile.pre-s2s.2Y3yBD`；不要重复激活。
+公网TLS仍报`TLSV1_ALERT_INTERNAL_ERROR`，HTTP外网出现`Non-compliance ICP Filing`拦截，尚未验收通过。
+第一次只读日志返回匹配0条；已准备增强的同入口诊断，详见[部署说明](deployment.md)。
 用户已确认使用`s2s.kirinxu.cn`，DNS已指向服务器，证书尚未开通；新站点CA仅固定Let's Encrypt，
 不回退ZeroSSL且不修改其他站点。kirin不能免密sudo/管理Docker，
-远端`shared/.env`秘密留空；未复制本地秘密、未修改Caddy/安全组/防火墙。
-域名不需再问；待用户安全填写远端.env并由管理员接受LE条款、执行激活，见[部署说明](deployment.md)。
+用户已亲自填写远端`shared/.env`并通过激活校验；未复制本地秘密，未修改安全组/防火墙。
+域名不需再问；目前需只读证书诊断，不自动重载、切换CA或调用模型。
 
 用户再次重新授权并更换 Key 后，已重启加载最新 `.env`，当前 PID67839，仅监听127.0.0.1:8080。
 登录页HTTP200；一次无音频验证取得HTTP101、`session.created`、当前完整配置的`session.updated`。

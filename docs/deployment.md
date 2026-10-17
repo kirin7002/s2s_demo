@@ -12,7 +12,8 @@
 仅对此站点显式配置一个ACME issuer：`https://acme-v02.api.letsencrypt.org/directory`。
 因此该站点只向Let's Encrypt申请/续期，不回退ZeroSSL，不修改其他站点的CA策略。
 管理员激活前应审阅并接受[Let's Encrypt当前订户协议](https://letsencrypt.org/documents/LE-SA-v1.8-July-06-2026.pdf)；
-此链接已通过官方ACME目录的`termsOfService`字段核对。当前尚未签发或激活。
+此链接已通过官方ACME目录的`termsOfService`字段核对。用户已执行激活，内部登录页HTTP200、
+Flash配置就绪；Caddy配置验证和reload命令已完成。公网TLS仍失败，不能视为部署验收通过。
 不买域名、不开新公网端口、不改防火墙或安全组。Caddy的WebSocket代理默认支持升级，无默认流超时：
 [官方反代文档](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy)。
 
@@ -61,9 +62,13 @@ sudo bash /home/kirin/apps/s2s_demo/releases/20261018-le-only/deploy/activate-al
 ssh -t -F /Users/kirin/go_path/jev_demo/.run/server-management/ssh_config aliyun-kirin 'sudo bash /home/kirin/apps/s2s_demo/staging/tls-diagnostics/collect-caddy-tls.sh'
 ```
 
-脚本只读取已有Caddy最近30分钟、最多1000行日志，输出最新20条本域名TLS事件的
-`msg/error/identifier/ca`；过滤其他站点与HTTP请求日志、常见秘密格式。不读取.env、请求头或证书私钥，
-不改文件、不reload/restart、不签发证书、不调用模型。管理员权限仅用于此次日志读取。
+首次执行返回`matched_s2s_certificate_events=0`，仅表示没有匹配日志，不能推断证书成功。
+已核验磁盘配置没有关闭自动HTTPS，原主站TLS正常，新域名仍报`TLSV1_ALERT_INTERNAL_ERROR`。
+更新后的脚本读取已有Caddy最近24小时、最多10000行日志，输出最新20条本域名TLS事件的
+`msg/error/identifier/ca`及日志行数；过滤其他站点与HTTP请求日志、常见秘密格式。
+同时只读查询容器运行状态、日志驱动及Caddy运行配置，仅输出目标路由/证书策略是否存在等布尔值，
+不输出原始配置。不读取.env、请求头或证书私钥，不改文件、不reload/restart、不签发证书、不调用模型。
+管理员权限仅用于此次状态与日志读取。
 
 ## 先前准备与验收边界
 

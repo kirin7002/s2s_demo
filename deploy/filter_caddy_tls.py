@@ -54,22 +54,37 @@ def filter_event(event):
     return result
 
 
-def collect(lines):
+def collect(lines, stats=None):
     events = deque(maxlen=20)
+    if stats is not None:
+        stats.update(log_lines=0, json_lines=0, tls_lines=0, target_lines=0)
     for line in lines:
+        if stats is not None:
+            stats['log_lines'] += 1
         if len(line) > 32768:
             continue
         try:
-            event = filter_event(json.loads(line))
+            record = json.loads(line)
         except (ValueError, TypeError):
             continue
+        if stats is not None:
+            stats['json_lines'] += 1
+            logger = record.get('logger', '') if isinstance(record, dict) else ''
+            if isinstance(logger, str) and (logger == 'tls' or logger.startswith('tls.')):
+                stats['tls_lines'] += 1
+            if TARGET.search(line):
+                stats['target_lines'] += 1
+        event = filter_event(record)
         if event is not None:
             events.append(event)
     return list(events)
 
 
 if __name__ == "__main__":
-    events = collect(sys.stdin)
+    stats = {}
+    events = collect(sys.stdin, stats)
     for event in events:
         print(json.dumps(event, ensure_ascii=False))
     print("matched_s2s_certificate_events=" + str(len(events)))
+    for key, value in stats.items():
+        print(key + '=' + str(value))
