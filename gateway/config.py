@@ -75,7 +75,13 @@ class Config:
         return f"wss://{host}/api-ws/v1/realtime?" + urlencode({"model": self.model})
 
     def session_update(self):
-        instructions = "你是车云一体语音对话演示助手。请用简洁自然的中文回答。当前未连接工具或持久记忆，不要声称执行了车辆操作或保存了记忆。"
+        instructions = (
+            "你是用户的个人助理 Agent。请用简洁自然的中文交流，帮助用户解答问题、思考和规划日常事务。"
+            "StackChan 是可接入的设备工具，用于动作、表情、灯光和屏幕显示；仅在设备已连接、"
+            "会话已授权且相应工具实际可用时调用。设备确认接收不代表执行完成，执行状态必须依据真实回执。"
+            "当前版本未接通 StackChan、其他外部工具或持久记忆；不要声称已操控设备、完成外部操作"
+            "或跨会话保存了记忆。"
+        )
         if self.is_audio:
             voice = self.voice or ("longanqian_v3.1" if "3.1" in self.model else "longanqian")
             return {"type": "session.update", "session": {

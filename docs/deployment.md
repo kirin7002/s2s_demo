@@ -144,6 +144,6 @@ Dockerfile 只准备运行镜像，尚未构建验证；不创建云资源，不
 2. 在部署环境秘密管理中注入对应地域的 DashScope API Key（变量名 `DASHSCOPE_API_KEY`）与独立 `S2S_DEMO_PASSWORD`，不在聊天、Dockerfile、构建参数或仓库里录入。配置地域、精确 HTTPS `S2S_ORIGIN`；默认不设置 `QWEN_WORKSPACE_ID`，仅显式选专属地址时才设置。凭据由运行时进程读取，修改后需重启；单独保存到 Vault 不代表已绑定任务。不要把 AccessKey 或 NLS Token 代替 DashScope API Key。临时 API Key 的申请/续期不在本轮实现范围。
 3. 用已有可信HTTPS反代提供 `/login`、`/chat`、静态资源与 `/ws`。反代须支持WebSocket Upgrade，空闲超时大于会话上限；不缓存API/登录响应，不记录口令请求体、Cookie、音频或转写。不依赖客户端伪造的转发头。
 4. 当前单口令仅供受控演示；公开多人使用前需真实身份认证、按用户限流与预算。Cookie为随机服务端内存会话、HttpOnly、SameSite Strict，HTTPS Origin时Secure，1小时过期，重启失效。退出将撤销同Cookie下所有已打开WebSocket。登录每IP最多每分钟5次，最多256个登录会话。无找回密码、账号注册或持久账号库。
-5. 后续明确预算后才启用 `S2S_ENABLE_LIVE=1`，执行少量真实握手/音频验证。手机号、车端身份、Memory Hub与工具后续独立设计。
+5. 后续明确预算后才启用 `S2S_ENABLE_LIVE=1`，执行少量真实握手/音频验证。用户身份、StackChan授权绑定、Memory Hub与工具后续独立设计。
 
 真机验收：iOS Safari与Android Chrome分别验证HTTPS麦克风授权/拒绝、首次触控启音、至少3轮、说话/按钮打断、停止/重连、网络切换、锁屏/后台、来电/系统音频暂停、耳机/蓝牙切换。记录首包、首音频、打断尾音及配额用量；使用授权测试音频，不默认上传真实用户音频。当前 Chromium 合成音频测试不替代这些步骤。

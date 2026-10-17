@@ -177,5 +177,5 @@ document.addEventListener('visibilitychange', () => {
 });
 fetch('/api/config').then(r => r.json()).then(c => {
   config = c; el('model').textContent = c.model === 'qwen-audio-3.0-realtime-flash' ? 'Qwen Audio · Flash' : c.model;
-  el('config').textContent = c.ready ? '轻点接通，开始语音对话' : c.message;
+  el('config').textContent = c.ready ? '接通与个人助理对话 · StackChan 工具待接入' : c.message;
 }).catch(() => { el('config').textContent = '无法读取服务配置。'; });

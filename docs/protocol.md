@@ -31,4 +31,6 @@ Audio 默认使用北京公共端点 `wss://dashscope.aliyuncs.com/api-ws/v1/rea
 
 ## 独立接口
 
-`gateway/ports.py` 定义 MemoryHub / ToolExecutor 类型契约。没有运行时实现、数据库、同步、离线任务、车控、MCP或工具声明。未来接入前须明确用户身份、跨端授权、事件幂等与错误语义；本轮不调用这些接口，也不把模型会话上下文包装为统一 Memory Hub。
+产品身份为个人助理 Agent；StackChan 是可接入的设备工具。`gateway/ports.py` 定义 MemoryHub / ToolExecutor 类型契约，
+尚无运行时实现、数据库、同步、离线任务、MCP或工具声明。不能把模型上下文当作持久记忆，
+也不能把协议设计完成当作设备已连接或动作已执行。后续实现遵循[StackChan接入约定](stackchan-integration.md)。

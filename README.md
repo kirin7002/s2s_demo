@@ -1,4 +1,8 @@
-# S2S 持续语音对话网关
+# S2S 个人助理 Agent
+
+通过手机持续语音与个人助理交流，帮助解答问题、思考和规划日常事务。StackChan 是可接入的设备工具，
+可用于动作、表情、灯光与屏幕显示；目前工具闭环、设备绑定及WSS设备路由尚未实现，持久记忆也未接入。
+能力与执行结果必须依据实际可用工具和真实设备回执，接纳命令不等于执行完成。
 
 当前默认 **`qwen-audio-3.0-realtime-flash`**，移动网页 → 同源 Python 网关 → 阿里云 Qwen-Audio Realtime WebSocket。代码已实现，尚未完成真实语音或手机麦克风联调。没有自动部署。
 
@@ -80,4 +84,5 @@ node --test tests/test_capture.js
 
 服务仅绑定 `127.0.0.1:8080`，默认关闭真实模型；入口为 `/login` 和 `/chat` 两页。登录使用演示口令与内存 Cookie 会话，未配置口令且未启用模型时明确显示本地预览。Origin 校验用于浏览器同源约束。当前适合本机开发，不能直接作为公网多用户服务。后续部署前需加入正式账户鉴权、按用户预算/限流与可信 HTTPS 反代，不修改云安全组来绕过约束。
 
-工具、外部 Memory Hub 仅有 [Python 接口](gateway/ports.py)，运行时不调用。没有车控、Memory Hub 存储/同步、离线任务或新云资源。[协议选型](docs/protocol.md) · [部署准备](docs/deployment.md)。
+工具、外部 Memory Hub 仅有 [Python 接口](gateway/ports.py)，运行时不调用。StackChan工具与持久记忆尚未接入，
+没有记忆存储/同步或离线任务。[协议选型](docs/protocol.md) · [StackChan接入约定](docs/stackchan-integration.md) · [部署准备](docs/deployment.md)。

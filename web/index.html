@@ -1,14 +1,14 @@
 <!doctype html>
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#eef3f9"><title>S2S · 语音通话</title><link rel="stylesheet" href="/style.css"></head>
+<meta name="theme-color" content="#eef3f9"><title>S2S · 个人助理</title><link rel="stylesheet" href="/style.css"></head>
 <body class="call-page" data-call-state="idle"><main class="call-shell">
-<header class="call-header"><a class="brand" href="/chat" aria-label="S2S 语音通话"><span class="brand-mark" aria-hidden="true">s<span>2</span>s</span><span>语音通话</span></a><button id="logout" class="text-button">退出登录</button></header>
+<header class="call-header"><a class="brand" href="/chat" aria-label="S2S 个人助理语音通话"><span class="brand-mark" aria-hidden="true">s<span>2</span>s</span><span>语音通话</span></a><button id="logout" class="text-button">退出登录</button></header>
 <section class="call-identity" aria-label="通话状态">
 <div class="avatar" aria-hidden="true"><div class="voice-mark"><i></i><i></i><i></i><i></i><i></i></div></div>
-<h1>语音助手</h1><p id="model" class="model-name">S2S · 持续语音对话</p>
+<h1>个人助理</h1><p id="model" class="model-name">S2S · 持续语音对话</p>
 <div class="call-status"><span class="status-dot" aria-hidden="true"></span><p id="status" role="status" aria-live="polite">等待接通</p><time id="duration" datetime="PT0S" hidden>00:00</time></div>
-<p id="detail">接通后，像打电话一样自然聊天。</p>
+<p id="detail">接通后，和你的个人助理聊聊。</p>
 </section>
 <section class="conversation" aria-labelledby="history-title"><div class="section-top"><h2 id="history-title">对话记录 <span>仅本次</span></h2><button id="clear" class="text-button" aria-label="清空对话显示"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5m4-5v5"/></svg>清空</button></div>
 <div id="transcripts" role="log" aria-label="本次对话记录" aria-live="polite" aria-relevant="additions text"><div class="empty"><div class="empty-icon" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M7 7h18v14H14l-7 5V7Z"/><path d="M12 12h8m-8 4h5"/></svg></div><p>从一句「你好」开始</p><span>接通后，对话文字会显示在这里。</span></div></div>
