@@ -1,0 +1,147 @@
+const el = id => document.getElementById(id);
+let current = null, generation = 0, config = null;
+let assistant = null;
+function status(title, detail = '') { el('status').textContent = title; el('detail').textContent = detail; }
+function buttons(busy, ready = false) {
+  el('start').disabled = busy; el('stop').disabled = !busy; el('interrupt').disabled = !ready;
+}
+function flush(s) {
+  for (const source of s.playing) { source.onended = null; try { source.stop(); } catch {} source.disconnect(); }
+  s.playing.clear(); s.nextTime = 0;
+}
+function dispose(s) {
+  if (!s || s.disposed) return;
+  s.disposed = true; clearTimeout(s.timer); s.abort.abort(); flush(s);
+  if (s.capture) { s.capture.port.onmessage = null; s.capture.disconnect(); }
+  s.source?.disconnect(); s.silent?.disconnect();
+  s.stream?.getTracks().forEach(track => track.stop());
+  if (s.socket) { s.socket.onclose = s.socket.onerror = s.socket.onmessage = null; s.socket.close(); }
+  if (s.context && s.context.state !== 'closed') s.context.close().catch(() => {});
+}
+function finish(s, title, detail) {
+  dispose(s);
+  if (current === s) { current = null; buttons(false); status(title, detail); el('start').textContent = '重新连接'; }
+}
+function transcript(role, text) {
+  if (!text) return;
+  el('transcripts').querySelector('.empty')?.remove();
+  let target;
+  if (role === 'assistant' && assistant) target = assistant;
+  else {
+    const row = document.createElement('div'); row.className = `utterance ${role}`;
+    const label = document.createElement('small'); label.textContent = role === 'user' ? '你' : '助手';
+    target = document.createElement('span'); row.append(label, target); el('transcripts').append(row);
+    if (role === 'assistant') assistant = target;
+    while (el('transcripts').children.length > 100) el('transcripts').firstElementChild.remove();
+  }
+  target.textContent = (target.textContent + text).slice(-32000);
+  el('transcripts').scrollTop = el('transcripts').scrollHeight;
+}
+function play(s, bytes) {
+  if (!bytes.byteLength || bytes.byteLength % 2 || s.context.state !== 'running') throw new Error('音频播放不可用，请重新连接。');
+  const duration = bytes.byteLength / 48000;
+  const at = Math.max(s.context.currentTime + .02, s.nextTime);
+  if (at + duration - s.context.currentTime > 8) throw new Error('播放积压过多，请重新连接。');
+  const data = new DataView(bytes), buffer = s.context.createBuffer(1, bytes.byteLength / 2, 24000);
+  const floats = buffer.getChannelData(0);
+  for (let i = 0; i < floats.length; i++) floats[i] = data.getInt16(i * 2, true) / 32768;
+  const source = s.context.createBufferSource(); source.buffer = buffer; source.connect(s.context.destination);
+  s.playing.add(source); source.onended = () => { s.playing.delete(source); source.disconnect(); };
+  source.start(at); s.nextTime = at + buffer.duration;
+}
+async function start() {
+  if (current) return;
+  const s = { id: ++generation, abort: new AbortController(), playing: new Set(), nextTime: 0, ready: false };
+  current = s; assistant = null; buttons(true); status('准备连接', '正在检查配置…');
+  const stale = () => current !== s || s.disposed;
+  s.timer = setTimeout(() => finish(s, '连接超时', '可点击重新连接。'), 30000);
+  try {
+    // Unlock audio synchronously inside the tap, before fetch/permission awaits.
+    // This matters on mobile Safari where transient user activation is short.
+    s.context = new AudioContext();
+    const unlocked = s.context.resume();
+    await unlocked;
+    if (stale()) return;
+    const response = await fetch('/api/config', { signal: s.abort.signal });
+    if (!response.ok) throw new Error('无法读取服务配置。');
+    config = await response.json();
+    if (stale()) return;
+    if (!config.ready) throw new Error(config.message || '服务端尚未准备好。');
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) throw new Error('麦克风需要 HTTPS 或 localhost 安全页面。');
+    status('等待麦克风授权', '可随时点击停止取消；允许后才会发送音频。');
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    if (stale()) { stream.getTracks().forEach(track => track.stop()); return; }
+    s.stream = stream;
+    for (const track of stream.getTracks()) track.onended = () => finish(s, '麦克风已断开', '请检查设备后重新连接。');
+    await s.context.audioWorklet.addModule('/capture.js');
+    if (stale()) return;
+    s.capture = new AudioWorkletNode(s.context, 'capture');
+    s.context.onstatechange = () => {
+      if (s.ready && !s.disposed && s.context.state !== 'running') finish(s, '音频已暂停', '系统中断了音频，请点击重新连接。');
+    };
+    s.source = s.context.createMediaStreamSource(stream);
+    s.silent = s.context.createGain(); s.silent.gain.value = 0;
+    s.source.connect(s.capture); s.capture.connect(s.silent); s.silent.connect(s.context.destination);
+    const socket = s.socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`);
+    socket.binaryType = 'arraybuffer';
+    status('正在建立会话', '等待模型确认音频配置…');
+    s.capture.port.onmessage = event => {
+      if (stale() || !s.ready || socket.readyState !== WebSocket.OPEN) return;
+      if (socket.bufferedAmount + event.data.byteLength > 64000) { finish(s, '网络发送积压', '音频已停止，请重新连接。'); return; }
+      socket.send(event.data);
+    };
+    socket.onmessage = event => {
+      if (stale()) return;
+      try {
+        if (event.data instanceof ArrayBuffer) { if (s.ready && !s.suppressed) play(s, event.data); return; }
+        const message = JSON.parse(event.data);
+        switch (message.type) {
+          case 'ready':
+            clearTimeout(s.timer); s.ready = true; buttons(true, true); status('正在聆听', '直接说话；停顿后模型自动回复。'); break;
+          case 'responding': assistant = null; s.suppressed = false; status('正在回复', '可开口或点击打断回复。'); break;
+          case 'interrupted': flush(s); s.suppressed = true; assistant = null; status('已打断，继续聆听', '可以继续说话。'); break;
+          case 'listening': status('正在聆听', '语音输入中…'); break;
+          case 'turn_done': assistant = null; status('继续聆听', '本轮生成结束，可以继续说话。'); break;
+          case 'transcript': transcript(message.role, message.text); break;
+          case 'notice': el('detail').textContent = message.message; break;
+          case 'error': finish(s, '会话错误', message.message); break;
+        }
+      } catch (error) { finish(s, '音频或协议错误', error.message); }
+    };
+    socket.onerror = () => finish(s, '连接失败', '请检查网关配置、网络或会话数量后重连。');
+    socket.onclose = () => finish(s, '连接已断开', '麦克风已释放，点击重新连接建立新会话。');
+  } catch (error) {
+    if (stale()) return;
+    const permission = error.name === 'NotAllowedError';
+    finish(s, permission ? '麦克风权限被拒绝' : '无法开始对话', permission ? '请在浏览器设置允许麦克风后重新连接。' : error.message);
+  }
+}
+el('start').onclick = start;
+el('stop').onclick = () => {
+  const s = current;
+  if (s?.socket?.readyState === WebSocket.OPEN) s.socket.send(JSON.stringify({ type: 'stop' }));
+  finish(s, '已停止', '麦克风与会话已关闭。');
+};
+el('interrupt').onclick = () => {
+  const s = current;
+  if (!s?.ready || s.socket.readyState !== WebSocket.OPEN) return;
+  flush(s); s.suppressed = true; s.socket.send(JSON.stringify({ type: 'interrupt' }));
+};
+el('clear').onclick = () => { el('transcripts').replaceChildren(); assistant = null; };
+el('logout').onclick = async () => {
+  if (current) finish(current, '已停止', '正在退出登录。');
+  try {
+    const response = await fetch('/api/logout', { method: 'POST', signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error('退出失败，请重试。');
+    location.replace('/login');
+  } catch { status('会话已停止', '网络恢复后请再次退出登录。'); }
+};
+window.addEventListener('pagehide', () => { if (current) finish(current, '会话已结束', '返回后可点击重新连接。'); });
+window.addEventListener('offline', () => { if (current) finish(current, '网络已离线', '网络恢复后可点击重新连接。'); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && current) finish(current, '页面已进入后台', '麦克风已释放，返回后可重新连接。');
+});
+fetch('/api/config').then(r => r.json()).then(c => {
+  config = c; el('model').textContent = `${c.model} · ${c.region}`;
+  el('config').textContent = c.ready ? '服务配置已就绪。开始将连接真实模型。' : c.message;
+}).catch(() => { el('config').textContent = '无法读取服务配置。'; });

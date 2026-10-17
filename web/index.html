@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>S2S · 持续语音对话</title><link rel="stylesheet" href="/style.css"></head>
+<body><main>
+<header><span class="tag">车云一体 · 语音入口</span><span id="model">读取配置…</span><button id="logout">退出登录</button></header>
+<h1>随时开口，持续对话。</h1>
+<p class="intro">连接后直接说话，模型自动判断轮次。说话可打断回复，也可手动打断。</p>
+<section class="console" aria-label="语音会话">
+<div class="orb" aria-hidden="true">◉</div>
+<p id="status" role="status" aria-live="polite">未连接</p>
+<p id="detail">麦克风仅在开始后采集；停止即释放。</p>
+<div class="controls"><button id="start">开始对话</button><button id="interrupt" disabled>打断回复</button><button id="stop" disabled>停止</button></div>
+<p id="config" class="hint"></p>
+</section>
+<section class="conversation"><div class="section-top"><h2>本次对话</h2><button id="clear">清空显示</button></div><div id="transcripts" role="log" aria-live="polite"><p class="empty">转写将在这里显示。</p></div></section>
+<footer>请使用耳机以减少回声。本演示未连接车控、工具或持久记忆。断线后点击重新连接将建立新会话。</footer>
+</main><script type="module" src="/app.js"></script></body></html>
