@@ -37,6 +37,11 @@ class Harness:
                 if self.mode == "reserved_bits":
                     # Malformed unnegotiated RSV1 frame, not a provider JSON error.
                     request.transport.write(b"\xc1\x00")
+                elif self.mode == "oversized_control":
+                    # RFC 6455 control frames cannot use a payload length of 126.
+                    # Synthetic reason must never be forwarded or logged.
+                    payload = b"\x03\xf0" + b"sensitive-frame-payload".ljust(124, b"x")
+                    request.transport.write(b"\x88\x7e\x00\x7e" + payload)
                 elif self.mode == "error":
                     await ws.send_json({"type": "error", "error": {"message": "sensitive-upstream-detail"}})
                 else:
@@ -187,6 +192,18 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event["ws_close_code"], 1002)
         self.assertIn("ws_close_code=1002", str(logs.output))
         self.assertNotIn(self.h.cfg.api_key, str(logs.output))
+        await ws.close()
+
+    async def test_oversized_control_frame_reproduces_1002_and_keeps_reason_private(self):
+        self.h.mode = "oversized_control"
+        with self.assertLogs("gateway.server", level="WARNING") as logs:
+            ws = await self.h.socket()
+            event = await self.receive(ws, "error")
+        self.assertEqual(event["code"], "UPSTREAM_WS_CONTROL_LENGTH")
+        self.assertEqual(event["stage"], "session_updated")
+        self.assertEqual(event["ws_close_code"], 1002)
+        self.assertNotIn("sensitive-frame-payload", str(logs.output))
+        self.assertNotIn("sensitive-frame-payload", json.dumps(event))
         await ws.close()
 
     async def test_http_rejection_is_distinct_without_leaking_exception_details(self):

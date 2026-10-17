@@ -54,6 +54,22 @@ JSON 载荷相符，并构造以下返回帧。两种解析器结果一致：
 将唯一传输变量改为 `compress=15`，记录扩展是否协商成功和安全帧分类，发送相同 `session.update`
 后立即关闭；不发音频、不生成、不自动重试。当前仍缺真实失败帧的具体解析类别。
 
+### 获授权的单变量压缩对照结果
+
+一次 `compress=15` 对照已完成：HTTP 101、压缩协商成功、收到 `session.created`；发送相同配置后
+仍返回 `WSMsgType.ERROR / WebSocketError / 1002`，具体固定分类为 `UPSTREAM_WS_CONTROL_LENGTH`。
+对应安装版解析器的 `Control frame payload cannot be larger than 125 bytes` 分支，不能通过
+改为协商压缩解决。未发送音频、`response.create` 或重试，也未更改应用的压缩设置。
+
+新增合成本地超长关闭帧 fixture，可重现相同的 `session_updated / UPSTREAM_WS_CONTROL_LENGTH / 1002`，
+并确认敏感帧原因不进入日志或页面。应用保持严格帧校验，不以忽略 RFC 6455 长度限制掩盖问题。
+尚缺违规控制帧的 opcode、声明长度与内部原因，当前不能判断是配置字段引发服务端错误关闭，
+还是其他控制帧/中间链路问题。
+
+若继续获准最小真实对照：同一 Flash/端点/鉴权，只将 `session.update.session` 改为空对象，
+并在内存中观测限长的帧头和关闭原因的安全分类；不保存或输出原始帧、凭据和请求头，不发送音频或生成。
+只做一次并立即断开，借此区分空配置也失败的传输问题与当前完整配置触发的问题，不循环删字段试错。
+
 日期：2026-10-17。运行环境：Python 3.12、aiohttp 3.14.4、系统 Chromium，390×844 移动视口与触控模式。
 
 ## 已通过
