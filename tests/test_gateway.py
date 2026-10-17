@@ -263,6 +263,16 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await h.close()
 
+    async def test_audio_public_configuration_can_establish_local_protocol_session(self):
+        h = await Harness(workspace="").open()
+        try:
+            ws = await h.socket()
+            await self.receive(ws, "ready")
+            self.assertEqual((await h.events.get())["session"]["turn_detection"], {"type": "smart_turn"})
+            await ws.close()
+        finally:
+            await h.close()
+
     async def test_https_origin_sets_secure_cookie(self):
         h = await Harness(origin="https://demo.example").open()
         try:
@@ -275,6 +285,43 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_runtime_configuration_does_not_require_workspace(self):
+        from unittest.mock import patch
+        values = {"DASHSCOPE_API_KEY": "local-placeholder", "S2S_DEMO_PASSWORD": "local-placeholder", "S2S_ENABLE_LIVE": "1"}
+        with patch("gateway.config.os.getenv", side_effect=lambda name, default=None: values.get(name, default)):
+            cfg = Config.from_env()
+        self.assertIsNone(cfg.problem())
+        self.assertEqual(cfg.workspace, "")
+        self.assertTrue(cfg.url.startswith("wss://dashscope.aliyuncs.com/"))
+
+    def test_audio_defaults_to_beijing_public_endpoint_without_workspace(self):
+        cfg = Config(api_key="local-placeholder", demo_password="local-placeholder", live_enabled=True)
+        self.assertIsNone(cfg.problem())
+        self.assertEqual(cfg.model, "qwen-audio-3.0-realtime-plus")
+        self.assertEqual(cfg.url, "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen-audio-3.0-realtime-plus")
+
+    def test_public_region_and_explicit_model_are_preserved(self):
+        cfg = Config(region="ap-southeast-1", model="qwen-audio-3.0-realtime-flash")
+        self.assertEqual(cfg.url, "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime?model=qwen-audio-3.0-realtime-flash")
+
+    def test_workspace_endpoint_is_optional_for_audio_and_required_for_omni(self):
+        cfg = Config(api_key="local-placeholder", demo_password="local-placeholder", live_enabled=True, workspace="example-space")
+        self.assertIsNone(cfg.problem())
+        self.assertEqual(cfg.url, "wss://example-space.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime?model=qwen-audio-3.0-realtime-plus")
+        omni = replace(cfg, model="qwen3.8-omni-flash-realtime", workspace="")
+        self.assertIsNotNone(omni.problem())
+        with self.assertRaises(ValueError):
+            _ = omni.url
+
+    def test_public_endpoint_missing_key_and_invalid_destinations_are_blocked(self):
+        cfg = Config(demo_password="local-placeholder", live_enabled=True)
+        self.assertIn("API Key", cfg.problem())
+        for changes in ({"region": "unknown"}, {"workspace": "x@evil.invalid/"}):
+            bad = replace(cfg, **changes)
+            self.assertIsNotNone(bad.problem())
+            with self.assertRaises(ValueError):
+                _ = bad.url
+
     def test_profiles_are_distinct(self):
         for model in ("qwen-audio-3.1-realtime-plus", "qwen-audio-3.0-realtime-plus", "qwen-audio-3.0-realtime-flash"):
             session = Config(model=model).session_update()["session"]

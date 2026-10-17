@@ -21,8 +21,8 @@ python -m gateway.server
 
 | 运行时环境变量 | 默认值 / 说明 |
 | --- | --- |
-| `DASHSCOPE_API_KEY` | 未设置；服务端 Bearer 鉴权，浏览器不接收 |
-| `QWEN_WORKSPACE_ID` | 未设置；百炼业务空间 ID |
+| `DASHSCOPE_API_KEY` | 未设置；北京（或所选地域）的百炼 DashScope API Key，服务端 Bearer 鉴权，浏览器不接收 |
+| `QWEN_WORKSPACE_ID` | 可选，默认留空使用 Audio 公共端点；显式设置才改用对应业务空间专属域名 |
 | `QWEN_REGION` | `cn-beijing`；亦支持 `ap-southeast-1`，Key 必须同地域 |
 | `QWEN_MODEL` | `qwen-audio-3.0-realtime-plus`；无自动升级或型号回退 |
 | `QWEN_VOICE` | 留空按型号选择默认音色；3.0 为 `longanqian` |
@@ -30,7 +30,23 @@ python -m gateway.server
 | `S2S_DEMO_PASSWORD` | 未设置；真实模式必需的演示登录口令，运行时注入 |
 | `S2S_ORIGIN` | `http://127.0.0.1:8080`；必须精确匹配访问网页的 Origin |
 
-模型 URL 由受限空间 ID、地域与型号构造，不能从浏览器提交任意上游地址。支持的其他显式型号：`qwen-audio-3.0-realtime-flash`、`qwen-audio-3.1-realtime-plus` 和独立 Omni 配置分支（3.8 Flash、3.5 Plus/Flash）。旧 `qwen3-omni-flash-realtime-2025-09-15` 不使用新版配置，当前直接拒绝。
+默认完整地址（无需 Workspace ID）：
+
+```text
+wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen-audio-3.0-realtime-plus
+```
+
+地域与型号的非秘密配置示例（仅配置，不启用模型）：
+
+```sh
+export QWEN_REGION=cn-beijing
+export QWEN_MODEL=qwen-audio-3.0-realtime-plus
+# QWEN_WORKSPACE_ID 默认不设置；DASHSCOPE_API_KEY 由安全运行环境单独注入。
+```
+
+新加坡 Audio 公共域名为 `dashscope-intl.aliyuncs.com`。显式设置有效 `QWEN_WORKSPACE_ID` 后，使用 `wss://{WorkspaceId}.{region}.maas.aliyuncs.com/api-ws/v1/realtime?model=...`。域名只能由固定地域映射或受限空间 ID 构造，浏览器不能提交任意上游地址。已有其他显式型号配置仍保留，不会自动切换型号；Omni 分支仍要求专属空间地址。旧 `qwen3-omni-flash-realtime-2025-09-15` 不使用新版配置，当前直接拒绝。
+
+这里的凭据准确名称是 **DashScope API Key**，不是阿里云 AccessKey ID/Secret、NLS Access Token 或 OAuth Access Token。官方另提供临时 API Key（默认60秒，最长1800秒）；当前程序只透传安全注入的值，不申请、刷新或验证其有效期，也未做3.0真实兼容性联调。首次服务端联调建议使用北京地域的 DashScope API Key；不要在聊天、网页表单或仓库中填写。参见 [官方地址与鉴权](https://help.aliyun.com/zh/model-studio/fun-audiochat-realtime-websocket-api)、[临时 API Key](https://help.aliyun.com/zh/model-studio/generate-temporary-api-key)。
 
 ## 使用与移动端行为
 

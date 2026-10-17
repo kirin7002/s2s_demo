@@ -36,8 +36,12 @@ class Config:
             return "真实模型连接未启用；本地页面可用。"
         if not self.demo_password:
             return "真实模型连接需要配置服务端演示登录口令。"
-        if not self.api_key or not re.fullmatch(r"[A-Za-z0-9-]{1,128}", self.workspace):
-            return "服务端缺少有效 API Key 或业务空间 ID。"
+        if not self.api_key:
+            return "服务端缺少北京或所选地域的 DashScope API Key。"
+        if self.workspace and not re.fullmatch(r"[A-Za-z0-9-]{1,128}", self.workspace):
+            return "业务空间 ID 格式无效。"
+        if not self.is_audio and not self.workspace:
+            return "Omni 专属地址需要业务空间 ID；Audio 默认公共地址无需配置。"
         if self.region not in ("cn-beijing", "ap-southeast-1"):
             return "不支持的地域。"
         if self.model not in ("qwen-audio-3.1-realtime-plus", "qwen-audio-3.0-realtime-plus",
@@ -51,8 +55,19 @@ class Config:
 
     @property
     def url(self):
-        return (f"wss://{self.workspace}.{self.region}.maas.aliyuncs.com/api-ws/v1/realtime?"
-                + urlencode({"model": self.model}))
+        public_hosts = {"cn-beijing": "dashscope.aliyuncs.com",
+                        "ap-southeast-1": "dashscope-intl.aliyuncs.com"}
+        if self.region not in public_hosts:
+            raise ValueError("Unsupported region")
+        if self.workspace:
+            if not re.fullmatch(r"[A-Za-z0-9-]{1,128}", self.workspace):
+                raise ValueError("Invalid workspace ID")
+            host = f"{self.workspace}.{self.region}.maas.aliyuncs.com"
+        elif self.is_audio:
+            host = public_hosts[self.region]
+        else:
+            raise ValueError("Omni requires a workspace endpoint")
+        return f"wss://{host}/api-ws/v1/realtime?" + urlencode({"model": self.model})
 
     def session_update(self):
         instructions = "你是车云一体语音对话演示助手。请用简洁自然的中文回答。当前未连接工具或持久记忆，不要声称执行了车辆操作或保存了记忆。"

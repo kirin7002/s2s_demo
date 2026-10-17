@@ -155,7 +155,7 @@ class Session:
             raise ProtocolError("模型返回无效协议消息。")
         if event["type"] == "error":
             # Upstream messages can contain request/config details. Do not relay or log them.
-            raise ProtocolError("模型返回错误，请核对服务端地域、空间、模型权限及配额。")
+            raise ProtocolError("模型返回错误，请核对服务端地域、API Key、模型权限及配额。")
         return event
 
     async def from_upstream(self):

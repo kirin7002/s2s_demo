@@ -6,7 +6,7 @@
 
 ```sh
 python -m unittest tests.test_gateway tests.test_browser -v
-# Ran 30 tests ... OK
+# Ran 36 tests ... OK
 node --test tests/test_capture.js
 # 4 passed, 0 failed
 python -m compileall -q gateway tests
@@ -15,7 +15,7 @@ node --check web/capture.js
 node --check web/login.js
 ```
 
-18项Python配置/网关/认证验证：Audio/Omni配置隔离、非法型号/地域/空间拒绝、同会话双轮双向PCM流、手动取消及残余抑制、Audio自动打断不重复取消、错误脱敏、配置不泄露Key/空间、Origin拒绝、未登录拒绝、退出后拒绝WebSocket、登录错误与频率限制、Cookie属性、连接数量上限、坏包清理、未启用不访问上游、握手超时、握手期间取消与资源释放，新增跨标签退出撤销、过期会话和错误响应防缓存、缺Key阻塞、HTTPS Secure Cookie回归。
+24项Python配置/网关/认证验证：Audio/Omni配置隔离、非法型号/地域/空间拒绝、同会话双轮双向PCM流、手动取消及残余抑制、Audio自动打断不重复取消、错误脱敏、配置不泄露Key/空间、Origin拒绝、未登录拒绝、退出后拒绝WebSocket、登录错误与频率限制、Cookie属性、连接数量上限、坏包清理、未启用不访问上游、握手超时、握手期间取消与资源释放，跨标签退出撤销、过期会话和错误响应防缓存、缺Key阻塞、HTTPS Secure Cookie回归，以及下述6项公共端点配置回归。
 
 12项Chromium浏览器验证：390像素无横向溢出、合成麦克风实际AudioWorklet上传和回复PCM播放、连续轮次、反复点击不重复建连、停止释放后重连、权限拒绝、等待权限时取消与迟到流释放、离线、上游断开、音频暂停、页面后台、登录失败/成功与退出，新增旧Socket迟到回调不污染新会话、离开页面后可重连、计入新包的输出积压拦截、打断立即停止并断开旧音源。相关场景组合在12个用例中执行。
 
@@ -30,6 +30,10 @@ node --check web/login.js
 5. 认证错误与跳转原先绕过响应防缓存/安全头；现统一添加并按aiohttp要求重新抛出HTTP异常。
 
 重新核对官方Audio客户端事件与WebSocket指南：3.0使用顶层PCM字段、`voice=longanqian`、`smart_turn`，未混入Omni嵌套音频字段或3.1专属语言配置。默认型号仍为`qwen-audio-3.0-realtime-plus`。这属于代码/文档核对，不能代替真实服务验收。
+
+## 公共端点小步变更
+
+Audio 默认北京公共地址，无需 Workspace ID。6项新增回归覆盖：准确默认URL与3.0 Plus型号、运行时缺省空间配置、新加坡公共域名与显式型号保持、可选Audio专属地址/Omni空间约束、缺Key及非法host输入拦截，以及无Workspace配置的本地握手。全部使用配置断言或本机fixture，没有连接真实公共模型；没有申请临时Token或配置真实秘密。
 
 曾发现建连阶段取消造成上游WebSocket未释放；现将限时建连任务独立托管，在finally收回并关闭，相关回归通过。浏览器测试保留严格CSP，没有为测试启用unsafe-eval。
 
