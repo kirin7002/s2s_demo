@@ -8,7 +8,8 @@ import unittest
 from aiohttp import ClientSession, WSMsgType, web, WSServerHandshakeError
 from aiohttp.test_utils import TestClient, TestServer
 from gateway.config import Config
-from gateway.server import ACTIVE, LOGINS, create_app
+from gateway.server import ACTIVE, LOGINS, create_app, upstream_frame_error
+from aiohttp.http_websocket import WebSocketError
 
 
 class Harness:
@@ -33,7 +34,10 @@ class Harness:
             event = json.loads(msg.data)
             await self.events.put(event)
             if event["type"] == "session.update":
-                if self.mode == "error":
+                if self.mode == "reserved_bits":
+                    # Malformed unnegotiated RSV1 frame, not a provider JSON error.
+                    request.transport.write(b"\xc1\x00")
+                elif self.mode == "error":
                     await ws.send_json({"type": "error", "error": {"message": "sensitive-upstream-detail"}})
                 else:
                     await ws.send_json({"type": "session.updated"})
@@ -173,6 +177,18 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(self.h.cfg.demo_password, str(logs.output))
         await ws.close()
 
+    async def test_parser_error_has_specific_code_and_never_logs_frame_payload(self):
+        self.h.mode = "reserved_bits"
+        with self.assertLogs("gateway.server", level="WARNING") as logs:
+            ws = await self.h.socket()
+            event = await self.receive(ws, "error")
+        self.assertEqual(event["code"], "UPSTREAM_WS_RESERVED_BITS")
+        self.assertEqual(event["stage"], "session_updated")
+        self.assertEqual(event["ws_close_code"], 1002)
+        self.assertIn("ws_close_code=1002", str(logs.output))
+        self.assertNotIn(self.h.cfg.api_key, str(logs.output))
+        await ws.close()
+
     async def test_http_rejection_is_distinct_without_leaking_exception_details(self):
         self.h.connect_error = WSServerHandshakeError(None, (), status=401,
                                                       message="sensitive-upstream-detail")
@@ -310,6 +326,18 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_frame_error_classification_discards_untrusted_details(self):
+        for detail, expected in [
+            ("Invalid close code: 1005", "UPSTREAM_WS_INVALID_CLOSE_CODE"),
+            ("Invalid close frame: sensitive-payload", "UPSTREAM_WS_FRAME_ERROR"),
+            ("Invalid UTF-8 text message", "UPSTREAM_WS_INVALID_UTF8"),
+            ("Control frame payload cannot be larger than 125 bytes", "UPSTREAM_WS_CONTROL_LENGTH"),
+        ]:
+            error = upstream_frame_error(WebSocketError(1002, detail), 1002)
+            self.assertEqual(error.code, expected)
+            self.assertNotIn("sensitive-payload", str(error))
+            self.assertEqual(error.ws_close_code, 1002)
+
     def test_runtime_configuration_does_not_require_workspace(self):
         from unittest.mock import patch
         values = {"DASHSCOPE_API_KEY": "local-placeholder", "S2S_DEMO_PASSWORD": "local-placeholder", "S2S_ENABLE_LIVE": "1"}

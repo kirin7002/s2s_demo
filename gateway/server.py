@@ -11,6 +11,7 @@ from pathlib import Path
 import time
 
 from aiohttp import ClientError, ClientSession, ClientTimeout, WSMsgType, WSServerHandshakeError, web
+from aiohttp.http_websocket import WebSocketError
 from .config import Config
 
 ROOT = Path(__file__).resolve().parent.parent / "web"
@@ -88,9 +89,30 @@ async def logout(request):
 
 
 class ProtocolError(Exception):
-    def __init__(self, message, code="PROTOCOL_ERROR"):
+    def __init__(self, message, code="PROTOCOL_ERROR", ws_close_code=0):
         super().__init__(message)
         self.code = code
+        self.ws_close_code = ws_close_code
+
+
+def upstream_frame_error(error, close_code):
+    # Parser exceptions may embed frame payloads. Classify locally, never forward
+    # arbitrary exception text, frame contents, or the server's close reason.
+    code = "UPSTREAM_WS_FRAME_ERROR"
+    if isinstance(error, WebSocketError):
+        detail = str(error)
+        if detail == "Received frame with non-zero reserved bits":
+            code = "UPSTREAM_WS_RESERVED_BITS"
+        elif detail.startswith("Invalid close code:"):
+            code = "UPSTREAM_WS_INVALID_CLOSE_CODE"
+        elif detail == "Control frame payload cannot be larger than 125 bytes":
+            code = "UPSTREAM_WS_CONTROL_LENGTH"
+        elif detail == "Invalid UTF-8 text message":
+            code = "UPSTREAM_WS_INVALID_UTF8"
+        elif detail == "Received fragmented control frame":
+            code = "UPSTREAM_WS_CONTROL_FRAGMENT"
+    numeric_code = close_code if isinstance(close_code, int) and 0 <= close_code <= 65535 else 0
+    return ProtocolError(f"上游 WebSocket 帧解析失败，关闭码 {numeric_code}。", code, numeric_code)
 
 
 class Session:
@@ -152,8 +174,15 @@ class Session:
 
     async def receive_event(self, timeout=None):
         msg = await self.upstream.receive(timeout=timeout)
+        if msg.type == WSMsgType.ERROR:
+            # aiohttp keeps WebSocketError in msg.data; ws.exception() can be None.
+            raise upstream_frame_error(msg.data, self.upstream.close_code)
+        if msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.CLOSING):
+            code = self.upstream.close_code
+            code = code if isinstance(code, int) and 0 <= code <= 65535 else 0
+            raise ProtocolError(f"模型连接已关闭，关闭码 {code}，请重新连接。", "UPSTREAM_CLOSED", code)
         if msg.type != WSMsgType.TEXT:
-            raise ProtocolError("模型连接已断开，请重新连接。")
+            raise ProtocolError("模型返回非文本协议消息。", "UPSTREAM_NON_TEXT")
         try:
             event = json.loads(msg.data)
         except ValueError:
@@ -214,13 +243,14 @@ class Session:
                     raise ProtocolError("本轮模型响应失败，请重新连接。")
                 await self.emit("turn_done")
 
-    async def report_failure(self, code, message, http_status=0):
+    async def report_failure(self, code, message, http_status=0, ws_close_code=0):
         # Only fixed local codes/stages and numeric HTTP status are recorded.
         # Never log exception repr, upstream error payloads, headers or audio.
-        LOGGER.warning("s2s_failure stage=%s code=%s http_status=%d", self.stage, code, http_status)
+        LOGGER.warning("s2s_failure stage=%s code=%s http_status=%d ws_close_code=%d",
+                       self.stage, code, http_status, ws_close_code)
         with contextlib.suppress(Exception):
             await self.emit("error", message=f"{message}（阶段：{STAGES[self.stage]}；诊断码：{code}）",
-                            code=code, stage=self.stage)
+                            code=code, stage=self.stage, ws_close_code=ws_close_code)
 
     async def run(self):
         tasks = [asyncio.create_task(self.from_browser()), asyncio.create_task(self.from_upstream())]
@@ -230,7 +260,7 @@ class Session:
                 for task in done:
                     task.result()
         except ProtocolError as error:
-            await self.report_failure(error.code, str(error))
+            await self.report_failure(error.code, str(error), ws_close_code=error.ws_close_code)
         except WSServerHandshakeError as error:
             status = error.status if isinstance(error.status, int) and 100 <= error.status <= 599 else 0
             await self.report_failure("UPSTREAM_HTTP_REJECTED", f"模型握手被拒绝，HTTP {status}。", status)
