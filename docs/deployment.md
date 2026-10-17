@@ -50,6 +50,21 @@ sudo bash /home/kirin/apps/s2s_demo/releases/20261018-le-only/deploy/activate-al
 管理员密码只在用户自己的终端输入，不交给Codex。脚本不会自动进行模型握手、音频或生成。
 完成后仍须从外网核验可信证书、登录、静态资源和WSS边界，再由用户手机接受麦克风权限并验收语音。
 
+## 只读证书日志交接
+
+当前应用内部检查已通过，但新站公网TLS尚未通过，HTTP外网有`Non-compliance ICP Filing`拦截。
+需要Caddy证书日志进一步确定签发原因；不要重复运行激活脚本。
+辅助脚本位于`/home/kirin/apps/s2s_demo/staging/tls-diagnostics/`。
+用户在Mac自己的终端执行一条命令并输入服务器sudo密码：
+
+```sh
+ssh -t -F /Users/kirin/go_path/jev_demo/.run/server-management/ssh_config aliyun-kirin 'sudo bash /home/kirin/apps/s2s_demo/staging/tls-diagnostics/collect-caddy-tls.sh'
+```
+
+脚本只读取已有Caddy最近30分钟、最多1000行日志，输出最新20条本域名TLS事件的
+`msg/error/identifier/ca`；过滤其他站点与HTTP请求日志、常见秘密格式。不读取.env、请求头或证书私钥，
+不改文件、不reload/restart、不签发证书、不调用模型。管理员权限仅用于此次日志读取。
+
 ## 先前准备与验收边界
 
 Dockerfile 只准备运行镜像，尚未构建验证；不创建云资源，不推镜像，不更改安全组。镜像内服务仍只监听 `127.0.0.1:8080`，没有公开端口。后续需结合实际反代拓扑审阅绑定方式，不能直接以 `-p` 期待访问环回服务。
