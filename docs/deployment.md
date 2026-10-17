@@ -1,5 +1,21 @@
 # 阿里云隔离部署
 
+## 当前已完成：2026-10-18
+
+**入口：https://s2s.kirinxu.cn/login**。可信TLS与登录页/全部前端资源已从公网验证；
+公开配置ready=true、Flash、要求演示口令。未登录/chat跳转/login，未登录WSS返回401。
+原主站TLS正常。没有云端模型握手或音频/生成验证；下一步由用户手机登录并验收语音。
+不要重复运行下文历史激活/修复命令。
+
+已修复旧单文件挂载与宿主不一致，以及原片段ACME issuer误写`ca`的问题。
+正确语法为`issuer acme { dir <directory_url> }`，见[官方文档](https://caddyserver.com/docs/caddyfile/directives/tls#acme)。
+受保护修复确认其他站点与运行配置一致，备份到`/opt/caddy/s2s-config-backup-miiiwzul`后，
+仅改目标字段并同步已有挂载、重载、核验实际运行JSON。日志确认签发成功，证书到期2027-01-15。
+17项本地测试通过。后续激活脚本已加入挂载一致性检查与运行配置验收。
+应用release保留，实际代理修复来自staging；旧release内错误部署片段不要再次执行。
+
+以下是准备、激活及故障诊断的历史过程；其中“未通过/待执行”不代表当前状态。
+
 2026-10-18 已只读核验现有服务器 `47.116.102.49`，SSH别名 `aliyun-kirin`、用户 `kirin`。
 代码准备放在 `/home/kirin/apps/s2s_demo/releases/<commit>/`，秘密单独位于
 `/home/kirin/apps/s2s_demo/shared/.env`（0600），不从本机复制任何 Key 或口令。
@@ -84,7 +100,7 @@ ssh -t -F /Users/kirin/go_path/jev_demo/.run/server-management/ssh_config aliyun
 然后备份宿主文件、容器挂载文件及运行JSON到root专用0700目录，文件0600。
 同步已有挂载文件，通过容器内0600临时文件加载已验证的配置，并核验实际运行JSON。
 临时文件使用后删除；避免依赖已安装Caddy对`--config -`的支持。
-目前尚不能确认首次适配失败就是stdin兼容问题，下一次失败会给出固定诊断类别。
+后续实际Caddy诊断确认是目标块`ca`字段错误，非stdin兼容问题；当前保留临时文件方式。
 失败时恢复原挂载内容和原运行配置。无需重新构建或重启任何容器；
 重载仍可能关闭既有WebSocket连接，并启动此前已批准的目标站点LE证书申请。
 不读取应用.env、不调用模型。命令由用户在自己的终端输入sudo密码执行：

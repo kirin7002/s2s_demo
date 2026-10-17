@@ -1,5 +1,21 @@
 # 验证记录
 
+## 阿里云HTTPS入口验证通过（2026-10-18）
+
+用户授权执行受保护的代理修复。服务器Caddy v2.11.7诊断确认：宿主与容器挂载文件内容不同；
+移除S2S块后的配置适配成功，完整配置在第31行拒绝ACME issuer中的`ca`子指令。
+已按[官方ACME issuer语法](https://caddyserver.com/docs/caddyfile/directives/tls#acme)改为`dir`，
+验证其他站点配置与运行配置完全一致后，备份、同步两个文件并重载，运行JSON与候选一致。
+本地17项诊断/修复测试及激活脚本bash语法检查通过；覆盖原错误字段迁移、差异拒绝、回滚和脱敏。
+
+过滤日志确认签发成功。Mac直连47.116.102.49、SNI为s2s.kirinxu.cn，使用系统CA并校验证书主机名：
+TLS可信，证书到期2027-01-15 16:26:37 UTC；/login及login.js/style.css/app.js/capture.js均200，
+/api/config的ready/password_required均true、型号为Flash；未登录/chat返回302至/login，
+带标准Upgrade及正确Origin的未登录/ws返回401。kirinxu.cn主站TLS也通过。
+HTTPS登录响应不含此前HTTP80观察到的ICP拦截页面；不能把旧HTTP观察当作当前HTTPS阻塞。
+没有提交演示口令或建立已认证WSS，没有触发云端模型、音频或生成。
+真实登录后的模型握手、手机麦克风及完整语音仍未在云部署验收。
+
 ## 最新 Key 的配置握手已通过（2026-10-18）
 
 用户重新授权并更换 Key 后，重启加载准确项目 `.env`，保持 Flash / 北京公共端点 / live模式。

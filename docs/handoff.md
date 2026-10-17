@@ -6,21 +6,24 @@
 
 ## 最新状态：2026-10-18
 
-用户已授权阿里云部署。无秘密代码已准备在服务器`47.116.102.49`的
-`/home/kirin/apps/s2s_demo/releases/3f670692f010`；禁用模型的服务器启动检查通过。
-固定LE的新准备版目录为`/home/kirin/apps/s2s_demo/releases/20261018-le-only`，旧目录保留，
-用户已执行新激活命令，内部登录页HTTP200、Flash配置就绪，Caddy验证/reload完成。
-回滚备份`/opt/caddy/Caddyfile.pre-s2s.2Y3yBD`；不要重复激活。
-公网TLS仍报`TLSV1_ALERT_INTERNAL_ERROR`，HTTP外网出现`Non-compliance ICP Filing`拦截，尚未验收通过。
-增强诊断确认运行配置可读，但目标路由/证书策略不存在，49条JSON日志中目标出现0次；
-磁盘文件有目标站点，当前故障是磁盘与运行配置不一致。已准备带其他站点差异保护、备份与回滚的
-管理员修复脚本。首次远端执行确认`mounted_file_matches_host=false`，但配置适配失败，未作修改。
-更新版使用容器0600临时配置文件并增加固定错误阶段/类别，16项本地测试通过，
-尚待管理员执行，详见[部署说明](deployment.md)。
-用户已确认使用`s2s.kirinxu.cn`，DNS已指向服务器，证书尚未开通；新站点CA仅固定Let's Encrypt，
-不回退ZeroSSL且不修改其他站点。kirin不能免密sudo/管理Docker，
-用户已亲自填写远端`shared/.env`并通过激活校验；未复制本地秘密，未修改安全组/防火墙。
-域名不需再问；目前需只读证书诊断，不自动重载、切换CA或调用模型。
+用户已授权部署及管理员修复，公网入口 **https://s2s.kirinxu.cn/login 已验证可用**。
+可信TLS通过，证书到期2027-01-15；Caddy日志确认`certificate obtained successfully`。
+登录页、全部4个前端资源HTTP200，公开配置ready=true/password_required=true/Flash；
+未登录/chat跳转/login，未登录WSS返回401。原主站TLS正常，HTTPS登录页无ICP拦截。
+没有云端真实模型、音频或生成测试；手机麦克风和完整语音仍待用户验收。
+
+根因有两项：容器单文件挂载内容落后于宿主文件；原新站片段误把ACME issuer字段写成`ca`，
+正确字段是`dir`。旧挂载让最初validate/reload实际读取了旧配置，漏掉了错误。
+已仅修正S2S字段、同步宿主与挂载，验证其他站点无差异后重载，并核验实际运行JSON。
+Caddy版本v2.11.7；17项本地诊断/修复测试通过。备份目录
+`/opt/caddy/s2s-config-backup-miiiwzul`（root0700，内文件0600）。不要重复激活/修复。
+后续激活脚本已加入挂载一致性预检和实际运行配置验收，详见[部署说明](deployment.md)。
+
+应用源码仍来自`/home/kirin/apps/s2s_demo/releases/20261018-le-only`；旧准备目录
+`releases/3f670692f010`保留。实际代理修复脚本位于`staging/tls-diagnostics/`。
+旧release内部署片段保留为历史，不要重复运行其中激活脚本；仓库最新片段已修正。
+用户已亲自填写远端`shared/.env`；未复制本地API Key、未修改安全组/防火墙。
+本次sudo授权会话已执行sudo -k并退出；不在文件或文档记录管理员密码。
 
 用户再次重新授权并更换 Key 后，已重启加载最新 `.env`，当前 PID67839，仅监听127.0.0.1:8080。
 登录页HTTP200；一次无音频验证取得HTTP101、`session.created`、当前完整配置的`session.updated`。

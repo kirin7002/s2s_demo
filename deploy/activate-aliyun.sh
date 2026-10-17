@@ -47,6 +47,11 @@ assert c["State"]["Running"], "Existing Caddy is not running"
 assert any(m["Source"] == "/opt/caddy/Caddyfile" and m["Destination"] == "/etc/caddy/Caddyfile" for m in c["Mounts"]), "Unexpected Caddy mount"
 print("existing_proxy_verified=true")'
 
+if ! docker exec caddy cat /etc/caddy/Caddyfile | cmp -s "$caddy_file" -; then
+    echo 'Caddy mounted file differs from host file; reconcile it before activation.' >&2
+    exit 1
+fi
+
 if docker container inspect "$container" >/dev/null 2>&1; then
     echo 'Container s2s-demo already exists; no existing container was changed.' >&2
     exit 1
@@ -132,6 +137,16 @@ if ! docker exec caddy caddy validate --config /etc/caddy/Caddyfile >/dev/null 2
 fi
 if ! docker exec caddy caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
     echo 'Caddy reload failed; restoring its previous file.' >&2
+    exit 1
+fi
+if ! docker exec caddy wget -qO- http://127.0.0.1:2019/config/ | PYTHONPATH="$release_dir" python3 -c '
+import json, sys
+from deploy.caddy_runtime_summary import summarize
+s = summarize(json.load(sys.stdin))
+assert s["active_s2s_route_present"] and s["active_s2s_le_issuer_present"]
+assert not s["active_s2s_auto_https_disabled"]
+print("active_s2s_configuration_verified=true")'; then
+    echo 'New S2S site is absent from active Caddy configuration; restoring its previous file.' >&2
     exit 1
 fi
 trap - EXIT

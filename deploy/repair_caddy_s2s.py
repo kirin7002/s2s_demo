@@ -71,12 +71,19 @@ def adapt(data):
     return json.loads(config_command('adapt', data, 'caddyfile'))
 
 
-def prepare(disk, snippet, active, adapter):
-    if disk.count(snippet) != 1 or len(re.findall(rb'^\s*s2s\.kirinxu\.cn\s*\{', disk, re.M)) != 1:
+def approved_config(disk, snippet):
+    legacy = snippet.replace(b'            dir https://', b'            ca https://', 1)
+    matches = [item for item in (snippet, legacy) if disk.count(item) == 1]
+    if len(matches) != 1 or len(re.findall(rb'^\s*s2s\.kirinxu\.cn\s*\{', disk, re.M)) != 1:
         raise RepairError('Expected exactly one unchanged approved S2S block; stopped.')
-    if adapter(disk.replace(snippet, b'', 1)) != active:
+    return disk.replace(matches[0], b'', 1), disk.replace(matches[0], snippet, 1)
+
+
+def prepare(disk, snippet, active, adapter):
+    base, corrected = approved_config(disk, snippet)
+    if adapter(base) != active:
         raise RepairError('Disk config also differs from active config outside S2S; stopped without changes.')
-    candidate = adapter(disk)
+    candidate = adapter(corrected)
     status = summarize(candidate)
     if not (status['active_s2s_route_present'] and status['active_s2s_le_issuer_present']
             and not status['active_s2s_auto_https_disabled']):
@@ -104,6 +111,7 @@ def main():
         raise RepairError('S2S is already active; no repair applied.')
     snippet = Path(__file__).with_name('Caddyfile.s2s').read_bytes()
     candidate = prepare(disk, snippet, before, adapt)
+    _, corrected = approved_config(disk, snippet)
     print('only_s2s_change_verified=true', flush=True)
     encoded = json.dumps(candidate).encode()
     config_command('validate', encoded)
@@ -115,10 +123,12 @@ def main():
     if HOST.read_bytes() != disk or execute('cat', MOUNT) != mounted or active_config() != before:
         raise RepairError('Configuration changed during preflight; stopped without changes.')
     try:
+        # Correct only the recognized original S2S field; preserve the host inode.
+        HOST.write_bytes(corrected)
         # Synchronize the existing mount too, including a stale single-file bind mount.
         # Never rename the host file or recreate/restart the shared Caddy container.
-        execute('sh', '-c', 'cat > /etc/caddy/Caddyfile', data=disk)
-        if HOST.read_bytes() != disk or execute('cat', MOUNT) != disk:
+        execute('sh', '-c', 'cat > /etc/caddy/Caddyfile', data=corrected)
+        if HOST.read_bytes() != corrected or execute('cat', MOUNT) != corrected:
             raise RepairError('Mounted file synchronization failed.')
         # Load the verified snapshot, never an older mounted file.
         config_command('reload', encoded)
@@ -128,6 +138,7 @@ def main():
         if isinstance(failure, RepairError):
             print('repair_failure=' + str(failure), flush=True)
         try:
+            HOST.write_bytes(disk)
             execute('sh', '-c', 'cat > /etc/caddy/Caddyfile', data=mounted)
             config_command('reload', json.dumps(before).encode())
             print('repair_rolled_back=true', flush=True)
@@ -136,6 +147,7 @@ def main():
         raise RepairError('Repair did not complete; see rollback status above.') from None
     print('active_s2s_route_present=true')
     print('active_s2s_le_issuer_present=true')
+    print('approved_s2s_syntax_corrected=' + str(corrected != disk).lower())
     print('repair_applied=true; certificate issuance still needs verification')
     print('No model handshake, audio or generation was performed.')
 

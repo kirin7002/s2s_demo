@@ -13,6 +13,7 @@ from deploy import repair_caddy_s2s as repair
 SNIPPET = Path('deploy/Caddyfile.s2s').read_bytes()
 BASE = b'old.example {\n respond "old"\n}\n'
 DISK = BASE + SNIPPET
+LEGACY_DISK = DISK.replace(b'            dir https://', b'            ca https://', 1)
 ACTIVE = {'old': True}
 CANDIDATE = {'old': True, 'apps': {
     'http': {'servers': {'srv0': {'routes': [{'match': [{'host': ['s2s.kirinxu.cn']}]}]}}},
@@ -37,11 +38,17 @@ class CaddyRepairTests(unittest.TestCase):
             with self.assertRaises(repair.RepairError):
                 repair.prepare(disk, SNIPPET, ACTIVE, adapter)
 
+    def test_original_invalid_ca_field_is_corrected_only_in_target_site(self):
+        base, corrected = repair.approved_config(LEGACY_DISK, SNIPPET)
+        self.assertEqual(base, BASE)
+        self.assertEqual(corrected, DISK)
+        self.assertEqual(repair.prepare(LEGACY_DISK, SNIPPET, ACTIVE, adapter), CANDIDATE)
+
     def exercise_main(self, fail_reload):
         state = {'mounted': BASE, 'active': ACTIVE, 'failed': False, 'temp': b''}
         with tempfile.TemporaryDirectory() as directory:
             host = Path(directory) / 'Caddyfile'
-            host.write_bytes(DISK)
+            host.write_bytes(LEGACY_DISK)
             backup = Path(directory) / 'backup'
             backup.mkdir()
 
@@ -83,7 +90,7 @@ class CaddyRepairTests(unittest.TestCase):
                         repair.main()
                 else:
                     repair.main()
-            self.assertEqual(host.read_bytes(), DISK)
+            self.assertEqual(host.read_bytes(), LEGACY_DISK if fail_reload else DISK)
             self.assertEqual((backup / 'mounted.Caddyfile').read_bytes(), BASE)
         return state, output.getvalue()
 
