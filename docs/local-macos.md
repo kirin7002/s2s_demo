@@ -48,7 +48,7 @@ python3.12 -m venv .venv
 用户只需用自己的编辑器填写 `DASHSCOPE_API_KEY` 和 `S2S_DEMO_PASSWORD`，不要把值发到聊天。
 如果文件已存在，准备过程保留原文件。`.env.example` 只包含空白秘密字段和普通配置，可以提交。
 
-当前准备的普通配置为真实模式、北京公共端点、`qwen-audio-3.0-realtime-plus`、
+当前准备的普通配置为真实模式、北京公共端点、`qwen-audio-3.0-realtime-flash`、
 `http://127.0.0.1:8080`，Workspace ID 留空。填好后再停止旧预览并启动：
 
 ```sh
@@ -78,7 +78,7 @@ cd /Users/kirin/go_path/s2s_demo
 
 按无回显提示亲自输入北京地域的 DashScope API Key 和自定演示登录口令；然后打开
 <http://127.0.0.1:8080>，使用该口令登录。脚本固定北京公共端点、
-`qwen-audio-3.0-realtime-plus`、`S2S_ENABLE_LIVE=1`，只监听 `127.0.0.1:8080`。
+`qwen-audio-3.0-realtime-flash`、`S2S_ENABLE_LIVE=1`，只监听 `127.0.0.1:8080`。
 凭据只保留在进程内存，不写文件、命令行参数、环境变量或日志，不从 Vault 读取。
 输入无需显示出来；不要通过管道、重定向或聊天传入。
 
@@ -93,7 +93,7 @@ cd /Users/kirin/go_path/s2s_demo
 
 本次检查只确认本地终端未设置 `DASHSCOPE_API_KEY`、`S2S_DEMO_PASSWORD`，没有读取任何秘密值。
 用户自行在安全的运行环境中注入这两个变量；Key 应属于所选地域且有目标模型权限。
-默认 `QWEN_REGION=cn-beijing`、`QWEN_MODEL=qwen-audio-3.0-realtime-plus`，Audio 公共端点无需 `QWEN_WORKSPACE_ID`。
+默认 `QWEN_REGION=cn-beijing`、`QWEN_MODEL=qwen-audio-3.0-realtime-flash`，Audio 公共端点无需 `QWEN_WORKSPACE_ID`。
 确认预算和权限后才将启动命令的 `S2S_ENABLE_LIVE=0` 改为 `1`，重新启动。
 `S2S_ORIGIN` 保持 `http://127.0.0.1:8080`。
 

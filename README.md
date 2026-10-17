@@ -1,6 +1,6 @@
 # S2S 持续语音对话网关
 
-本轮默认 **`qwen-audio-3.0-realtime-plus`**，移动网页 → 同源 Python 网关 → 阿里云 Qwen-Audio Realtime WebSocket。代码已实现，尚未用真实模型或真实手机麦克风联调。没有自动部署或付费调用。
+当前默认 **`qwen-audio-3.0-realtime-flash`**，移动网页 → 同源 Python 网关 → 阿里云 Qwen-Audio Realtime WebSocket。代码已实现，尚未完成真实语音或手机麦克风联调。没有自动部署。
 
 ## 本地启动
 
@@ -28,7 +28,7 @@ Mac 已准备项目的启动命令与本次验证结果见 [Mac 本地启动](do
 | `DASHSCOPE_API_KEY` | 未设置；北京（或所选地域）的百炼 DashScope API Key，服务端 Bearer 鉴权，浏览器不接收 |
 | `QWEN_WORKSPACE_ID` | 可选，默认留空使用 Audio 公共端点；显式设置才改用对应业务空间专属域名 |
 | `QWEN_REGION` | `cn-beijing`；亦支持 `ap-southeast-1`，Key 必须同地域 |
-| `QWEN_MODEL` | `qwen-audio-3.0-realtime-plus`；无自动升级或型号回退 |
+| `QWEN_MODEL` | `qwen-audio-3.0-realtime-flash`；无自动升级或型号回退 |
 | `QWEN_VOICE` | 留空按型号选择默认音色；3.0 为 `longanqian` |
 | `S2S_ENABLE_LIVE` | 默认关闭；显式 `1` 才允许出站模型连接 |
 | `S2S_DEMO_PASSWORD` | 未设置；真实模式必需的演示登录口令，运行时注入 |
@@ -37,14 +37,14 @@ Mac 已准备项目的启动命令与本次验证结果见 [Mac 本地启动](do
 默认完整地址（无需 Workspace ID）：
 
 ```text
-wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen-audio-3.0-realtime-plus
+wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen-audio-3.0-realtime-flash
 ```
 
 地域与型号的非秘密配置示例（仅配置，不启用模型）：
 
 ```sh
 export QWEN_REGION=cn-beijing
-export QWEN_MODEL=qwen-audio-3.0-realtime-plus
+export QWEN_MODEL=qwen-audio-3.0-realtime-flash
 # QWEN_WORKSPACE_ID 默认不设置；DASHSCOPE_API_KEY 由安全运行环境单独注入。
 ```
 

@@ -35,7 +35,7 @@ S2S_ENABLE_LIVE=0 S2S_ORIGIN=http://127.0.0.1:8080 .venv/bin/python -m gateway.s
 上游交接报告称原云环境 `DASHSCOPE_API_KEY` 非空；这里只记录状态，没有重新检查云环境或读取秘密。
 该状态不代表 Mac 已配置：此前本机检查中 `DASHSCOPE_API_KEY` 和 `S2S_DEMO_PASSWORD` 均未设置。
 真实 Key、独立演示口令须由用户自行填写本地 `.env` 或安全注入运行环境；不要从 Vault、聊天或云环境迁移秘密。
-应用现在自动读取项目根目录 `.env`，进程环境变量（包括空值）优先。文件只解析字面值，不执行 shell 或插值；本地准备文件秘密字段留空，权限 `0600`，Git 忽略。默认北京地域、`qwen-audio-3.0-realtime-plus`，Audio 公共端点无需 Workspace ID。
+应用现在自动读取项目根目录 `.env`，进程环境变量（包括空值）优先。文件只解析字面值，不执行 shell 或插值；本地准备文件秘密字段留空，权限 `0600`，Git 忽略。默认北京地域、`qwen-audio-3.0-realtime-flash`，Audio 公共端点无需 Workspace ID。
 仅在用户确认权限和预算后才启用 `S2S_ENABLE_LIVE=1`。没有持久凭据、付费模型调用或云部署。
 
 ## Codex 项目注册状态

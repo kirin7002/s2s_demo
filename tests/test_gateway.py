@@ -19,6 +19,7 @@ class Harness:
         self.events = asyncio.Queue()
         self.mode = "normal"
         self.turn = 0
+        self.connect_error = None
 
     async def provider(self, request):
         ws = web.WebSocketResponse()
@@ -54,6 +55,8 @@ class Harness:
         await self.provider_server.start_server()
         self.http = ClientSession()
         async def connect():
+            if self.connect_error is not None:
+                raise self.connect_error
             return await self.http.ws_connect(self.provider_server.make_url("/realtime"))
         self.app = create_app(self.cfg, connector=connect)
         self.client = TestClient(TestServer(self.app))
@@ -158,9 +161,29 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_upstream_error_is_sanitized(self):
         self.h.mode = "error"
-        ws = await self.h.socket()
-        event = await self.receive(ws, "error")
+        with self.assertLogs("gateway.server", level="WARNING") as logs:
+            ws = await self.h.socket()
+            event = await self.receive(ws, "error")
+        self.assertEqual(event["code"], "UPSTREAM_EVENT_ERROR")
+        self.assertEqual(event["stage"], "session_updated")
+        self.assertIn("等待音频配置确认", event["message"])
         self.assertNotIn("sensitive-upstream-detail", json.dumps(event))
+        self.assertNotIn("sensitive-upstream-detail", str(logs.output))
+        self.assertNotIn(self.h.cfg.api_key, str(logs.output))
+        self.assertNotIn(self.h.cfg.demo_password, str(logs.output))
+        await ws.close()
+
+    async def test_http_rejection_is_distinct_without_leaking_exception_details(self):
+        self.h.connect_error = WSServerHandshakeError(None, (), status=401,
+                                                      message="sensitive-upstream-detail")
+        with self.assertLogs("gateway.server", level="WARNING") as logs:
+            ws = await self.h.socket()
+            event = await self.receive(ws, "error")
+        self.assertEqual(event["code"], "UPSTREAM_HTTP_REJECTED")
+        self.assertEqual(event["stage"], "connect")
+        self.assertIn("401", event["message"])
+        self.assertNotIn("sensitive-upstream-detail", json.dumps(event))
+        self.assertNotIn("sensitive-upstream-detail", str(logs.output))
         await ws.close()
 
     async def test_disconnect_before_ready(self):
@@ -186,7 +209,9 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         h.mode = "hang"
         try:
             ws = await h.socket()
-            await self.receive(ws, "error")
+            event = await self.receive(ws, "error")
+            self.assertEqual(event["code"], "SESSION_TIMEOUT")
+            self.assertEqual(event["stage"], "session_created")
             await ws.close()
         finally:
             await h.close()
@@ -297,8 +322,9 @@ class ConfigurationTests(unittest.TestCase):
     def test_audio_defaults_to_beijing_public_endpoint_without_workspace(self):
         cfg = Config(api_key="local-placeholder", demo_password="local-placeholder", live_enabled=True)
         self.assertIsNone(cfg.problem())
-        self.assertEqual(cfg.model, "qwen-audio-3.0-realtime-plus")
-        self.assertEqual(cfg.url, "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen-audio-3.0-realtime-plus")
+        self.assertEqual(cfg.model, "qwen-audio-3.0-realtime-flash")
+        self.assertEqual(cfg.session_update()["session"]["voice"], "longanqian")
+        self.assertEqual(cfg.url, "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen-audio-3.0-realtime-flash")
 
     def test_public_region_and_explicit_model_are_preserved(self):
         cfg = Config(region="ap-southeast-1", model="qwen-audio-3.0-realtime-flash")
@@ -307,7 +333,7 @@ class ConfigurationTests(unittest.TestCase):
     def test_workspace_endpoint_is_optional_for_audio_and_required_for_omni(self):
         cfg = Config(api_key="local-placeholder", demo_password="local-placeholder", live_enabled=True, workspace="example-space")
         self.assertIsNone(cfg.problem())
-        self.assertEqual(cfg.url, "wss://example-space.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime?model=qwen-audio-3.0-realtime-plus")
+        self.assertEqual(cfg.url, "wss://example-space.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime?model=qwen-audio-3.0-realtime-flash")
         omni = replace(cfg, model="qwen3.8-omni-flash-realtime", workspace="")
         self.assertIsNotNone(omni.problem())
         with self.assertRaises(ValueError):

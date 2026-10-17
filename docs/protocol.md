@@ -4,7 +4,7 @@
 
 | 项目 | 本轮专用 Audio Realtime | 后续可选 Omni Realtime |
 | --- | --- | --- |
-| 显式默认型号 | `qwen-audio-3.0-realtime-plus` | 不自动启用；可显式选择 `qwen3.8-omni-flash-realtime` |
+| 显式默认型号 | `qwen-audio-3.0-realtime-flash` | 不自动启用；可显式选择 `qwen3.8-omni-flash-realtime` |
 | 本轮匹配 | 纯语音连续对话 | 未来图像/视频场景 |
 | 轮次字段 | `smart_turn` | `semantic_vad` |
 | 格式配置 | 顶层 `input_audio_format` / `output_audio_format` | 嵌套 `audio.input.format` / `audio.output.format` |
@@ -14,7 +14,7 @@
 
 依据：[Audio 指南](https://help.aliyun.com/zh/model-studio/qwen-audio-realtime-user-guides)、[Audio 客户端事件](https://help.aliyun.com/zh/model-studio/fun-audiochat-client-events)、[Omni 指南](https://help.aliyun.com/zh/model-studio/realtime)、[Omni 客户端事件](https://help.aliyun.com/zh/model-studio/client-events)。这是协议字段对照，不代表两个系列可互换会话配置。
 
-Audio 默认使用北京公共端点 `wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen-audio-3.0-realtime-plus`，无需 Workspace ID；新加坡公共域名为 `dashscope-intl.aliyuncs.com`。显式提供空间 ID 时才使用该地域业务空间域名；Omni 分支仍要求空间地址。Key 必须与地域一致。公共域名沿用官方保留地址，未改变 Audio 的 smart_turn 或 PCM 协议。参见 [Audio WebSocket 地址与鉴权](https://help.aliyun.com/zh/model-studio/fun-audiochat-realtime-websocket-api)。
+Audio 默认使用北京公共端点 `wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen-audio-3.0-realtime-flash`，无需 Workspace ID；新加坡公共域名为 `dashscope-intl.aliyuncs.com`。显式提供空间 ID 时才使用该地域业务空间域名；Omni 分支仍要求空间地址。Key 必须与地域一致。公共域名沿用官方保留地址，未改变 Audio 的 smart_turn 或 PCM 协议。参见 [Audio WebSocket 地址与鉴权](https://help.aliyun.com/zh/model-studio/fun-audiochat-realtime-websocket-api)。
 
 推荐依据是用户确定的3.0方向与本轮纯语音范围，不是性能排名。没有同条件端到端延迟实测，也没有可用于本账号、地域与计费方式的预算核验，因此不能声称 Audio 比 Omni 更快、更便宜或效果更好。正式对比需相同设备、网络、音频与轮次条件，测首音频时间、打断尾音、错误率和实际用量；须先取得测试预算授权。
 

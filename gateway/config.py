@@ -12,7 +12,7 @@ class Config:
     demo_password: str = field(default="", repr=False)
     workspace: str = ""
     region: str = "cn-beijing"
-    model: str = "qwen-audio-3.0-realtime-plus"
+    model: str = "qwen-audio-3.0-realtime-flash"
     voice: str = ""
     live_enabled: bool = False
     origin: str = "http://127.0.0.1:8080"
@@ -31,7 +31,7 @@ class Config:
                    demo_password=get("S2S_DEMO_PASSWORD"),
                    workspace=get("QWEN_WORKSPACE_ID"),
                    region=get("QWEN_REGION", "cn-beijing"),
-                   model=get("QWEN_MODEL", "qwen-audio-3.0-realtime-plus"),
+                   model=get("QWEN_MODEL", "qwen-audio-3.0-realtime-flash"),
                    voice=get("QWEN_VOICE"),
                    live_enabled=get("S2S_ENABLE_LIVE") == "1",
                    origin=get("S2S_ORIGIN", "http://127.0.0.1:8080"))

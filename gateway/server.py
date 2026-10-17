@@ -5,11 +5,12 @@ import contextlib
 import json
 import hashlib
 import hmac
+import logging
 import secrets
 from pathlib import Path
 import time
 
-from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
+from aiohttp import ClientError, ClientSession, ClientTimeout, WSMsgType, WSServerHandshakeError, web
 from .config import Config
 
 ROOT = Path(__file__).resolve().parent.parent / "web"
@@ -20,6 +21,9 @@ CONNECTOR = web.AppKey("connector", object)
 LOGINS = web.AppKey("logins", dict)
 ATTEMPTS = web.AppKey("attempts", dict)
 OWNERS = web.AppKey("owners", dict)
+LOGGER = logging.getLogger(__name__)
+STAGES = {"connect": "上游握手", "session_created": "等待会话创建",
+          "session_updated": "等待音频配置确认", "streaming": "语音会话"}
 
 
 def authenticated(request):
@@ -84,7 +88,9 @@ async def logout(request):
 
 
 class ProtocolError(Exception):
-    pass
+    def __init__(self, message, code="PROTOCOL_ERROR"):
+        super().__init__(message)
+        self.code = code
 
 
 class Session:
@@ -98,6 +104,7 @@ class Session:
         self.suppressed = False
         self.audio_window = time.monotonic()
         self.audio_bytes = 0
+        self.stage = "connect"
 
     async def emit(self, kind, **fields):
         await asyncio.wait_for(self.browser.send_json({"type": kind, **fields}), 5)
@@ -155,7 +162,7 @@ class Session:
             raise ProtocolError("模型返回无效协议消息。")
         if event["type"] == "error":
             # Upstream messages can contain request/config details. Do not relay or log them.
-            raise ProtocolError("模型返回错误，请核对服务端地域、API Key、模型权限及配额。")
+            raise ProtocolError("模型返回错误，请核对服务端地域、API Key、模型权限及配额。", "UPSTREAM_EVENT_ERROR")
         return event
 
     async def from_upstream(self):
@@ -166,13 +173,16 @@ class Session:
         # Let an in-flight upgrade finish under its deadline even if the browser
         # leaves, so its returned socket is always owned and closed in finally.
         self.upstream = await asyncio.shield(self.connect_task)
+        self.stage = "session_created"
         async with asyncio.timeout(self.config.handshake_seconds):
             while (await self.receive_event())["type"] != "session.created":
                 pass
             await self.upstream_send(self.config.session_update())
+            self.stage = "session_updated"
             while (await self.receive_event())["type"] != "session.updated":
                 pass
         self.ready = True
+        self.stage = "streaming"
         await self.emit("ready", model=self.config.model, input_rate=16000, output_rate=24000)
         while True:
             event = await self.receive_event(self.config.idle_seconds)
@@ -204,6 +214,14 @@ class Session:
                     raise ProtocolError("本轮模型响应失败，请重新连接。")
                 await self.emit("turn_done")
 
+    async def report_failure(self, code, message, http_status=0):
+        # Only fixed local codes/stages and numeric HTTP status are recorded.
+        # Never log exception repr, upstream error payloads, headers or audio.
+        LOGGER.warning("s2s_failure stage=%s code=%s http_status=%d", self.stage, code, http_status)
+        with contextlib.suppress(Exception):
+            await self.emit("error", message=f"{message}（阶段：{STAGES[self.stage]}；诊断码：{code}）",
+                            code=code, stage=self.stage)
+
     async def run(self):
         tasks = [asyncio.create_task(self.from_browser()), asyncio.create_task(self.from_upstream())]
         try:
@@ -212,14 +230,16 @@ class Session:
                 for task in done:
                     task.result()
         except ProtocolError as error:
-            with contextlib.suppress(Exception):
-                await self.emit("error", message=str(error))
+            await self.report_failure(error.code, str(error))
+        except WSServerHandshakeError as error:
+            status = error.status if isinstance(error.status, int) and 100 <= error.status <= 599 else 0
+            await self.report_failure("UPSTREAM_HTTP_REJECTED", f"模型握手被拒绝，HTTP {status}。", status)
+        except ClientError:
+            await self.report_failure("UPSTREAM_NETWORK_ERROR", "模型网络连接失败，请检查服务器网络。")
         except TimeoutError:
-            with contextlib.suppress(Exception):
-                await self.emit("error", message="连接等待、传输或会话时长已超限，请重新连接。")
+            await self.report_failure("SESSION_TIMEOUT", "连接等待、传输或会话时长已超限，请重新连接。")
         except Exception:
-            with contextlib.suppress(Exception):
-                await self.emit("error", message="模型连接失败，请核对服务端配置或稍后重连。")
+            await self.report_failure("SESSION_INTERNAL_ERROR", "模型连接失败，请核对服务端配置或稍后重连。")
         finally:
             for task in tasks:
                 task.cancel()
@@ -236,13 +256,16 @@ class Session:
 async def socket(request):
     cfg = request.app[CONFIG]
     if request.headers.get("Origin") != cfg.origin:
+        LOGGER.warning("s2s_rejected code=LOCAL_ORIGIN_REJECTED")
         raise web.HTTPForbidden(text="Origin rejected")
     if not authenticated(request):
+        LOGGER.warning("s2s_rejected code=LOCAL_AUTH_REQUIRED")
         raise web.HTTPUnauthorized(text="Login required")
     if cfg.problem():
         return web.json_response({"error": cfg.problem()}, status=503)
     active = request.app[ACTIVE]
     if len(active) >= cfg.max_sessions:
+        LOGGER.warning("s2s_rejected code=LOCAL_SESSION_LIMIT")
         return web.json_response({"error": "会话数量已达上限。"}, status=429)
     # Reserve before any await so parallel upgrades cannot exceed the cap.
     reservation = object()
