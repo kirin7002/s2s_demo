@@ -23,6 +23,37 @@ Mac 浏览器测试仍因固定 Linux Chromium 路径未运行；网页实际报
 与数字关闭码，区分保留位、非法关闭码、控制帧、UTF-8 与普通关闭；不输出原始异常或帧载荷。
 本地异常帧 fixture 及脱敏分类测试通过。真实根因仍待新分类证据，不将可登录页面当成完整 S2S 已修复。
 
+### 本地传输对照排查
+
+在 aiohttp 3.14.5 上分别使用已安装的 Cython 解析器和其 Python 实现，共跑 12 个纯环回实验。
+使用 `Config()` 的默认 Flash 会话配置，不读取 `.env`；原始 TCP fixture 验证客户端 mask 和
+JSON 载荷相符，并构造以下返回帧。两种解析器结果一致：
+
+| 返回帧 | Cython / Python 结果 |
+| --- | --- |
+| 超过 64 KiB 的普通 UTF-8 配置确认 | `TEXT / session.updated` |
+| 分片配置确认，中间插入正常 ping | `TEXT / session.updated` |
+| 双方协商 permessage-deflate 后压缩配置确认 | `TEXT / session.updated` |
+| 未协商扩展却设置 RSV1 的压缩帧 | `ERROR / 1002 / non-zero reserved bits` |
+| 关闭帧内包含非法状态 1005 | `ERROR / 1002 / Invalid close code` |
+| 服务端发送合法关闭帧，状态为 1002 | `CLOSE / 1002` |
+
+这排除了当前配置的 JSON 编码、客户端 mask、正常长帧/分片以及单独 C 扩展差异在本地对照中的故障。
+真实诊断收到的是 `ERROR` 而非 `CLOSE`，结合安装版 `ClientWebSocketResponse.receive()` 源码，
+可确认 1002 来自本地 `WebSocketError` 解析路径，不是直接收到服务端正常 1002 关闭帧。
+但至少两种异常输入均能产生同一观测，无法只凭 1002 判定是压缩或会话字段造成。
+
+已确认实现差异：本项目 `ws_connect()` 默认 `compress=0`；官方示例使用的 websockets
+默认协商压缩（本机未安装该库，没有可比较的安装版本）。参考
+[aiohttp 参数](https://docs.aiohttp.org/en/stable/client_reference.html#aiohttp.ClientSession.ws_connect)、
+[websockets 压缩默认值](https://websockets.readthedocs.io/en/stable/topics/compression.html)。
+官方 Audio schema 中，当前 `modalities`、`voice=longanqian`、PCM 字段和 `smart_turn` 均有定义；
+这一静态核对不代表当前真实会话已接受配置。
+
+本次未追加真实请求、未换依赖或放宽协议检查。若授权追加最小对照，只建立一次 Flash 连接、
+将唯一传输变量改为 `compress=15`，记录扩展是否协商成功和安全帧分类，发送相同 `session.update`
+后立即关闭；不发音频、不生成、不自动重试。当前仍缺真实失败帧的具体解析类别。
+
 日期：2026-10-17。运行环境：Python 3.12、aiohttp 3.14.4、系统 Chromium，390×844 移动视口与触控模式。
 
 ## 已通过
