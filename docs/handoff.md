@@ -6,6 +6,13 @@
 
 ## 最新状态：2026-10-18
 
+用户要求Apple/Skype风格移动通话页，并要求发布到现有站点。UI提交`3f6501e`：
+上方本次对话记录、底部圆形接通/挂断、静音/打断、通话计时，保留登录及Flash。
+已看手机/桌面截图，完整Python回归72项（14项Mac Chrome浏览器）和音频4项通过；
+新增更新保护测试3项通过。本地禁用模型预览`http://127.0.0.1:8081`已启动并请求在Codex打开。
+远端UI更新尚待用户亲自在终端sudo；发布包与命令见[部署说明](deployment.md)。
+禁止再次使用聊天中曾贴出的密码，不做新模型调用或凭据更换。
+
 用户已授权部署及管理员修复，公网入口 **https://s2s.kirinxu.cn/login 已验证可用**。
 可信TLS通过，证书到期2027-01-15；Caddy日志确认`certificate obtained successfully`。
 登录页、全部4个前端资源HTTP200，公开配置ready=true/password_required=true/Flash；

@@ -16,6 +16,27 @@
 
 以下是准备、激活及故障诊断的历史过程；其中“未通过/待执行”不代表当前状态。
 
+## 通话界面更新（待管理员发布）
+
+用户已要求把通话界面更新到现有站点。UI提交`3f6501e9e9d9164c9f357681e55511bd35be4215`，
+发布包目录`/home/kirin/apps/s2s_demo/releases/ui-3f6501e9e9d9`。
+包中仅6个web文件、[更新脚本](../deploy/update_ui.py)及无秘密的版本/文件校验清单。
+脚本验证包、现有应用身份/只读根目录/共享Caddy网络及本地基础镜像；只在原镜像上COPY新的web，
+构建无网络、无依赖更新。新容器沿用现有容器的运行配置，值只在服务器子进程环境传递，
+不输出、不写入文件或argv，不从本机复制任何秘密。
+保留原应用容器为` s2s-demo.pre-ui-3f6501e9e9d9`（实际名字无前导空格），只更新S2S容器，
+不改Caddy/其他应用/证书。切换短暂中断现有S2S通话；内部登录页、Flash就绪及新CSS校验失败会回滚。
+新版本生效不主动连接模型。备份容器保留为手动停止状态，以便后续回滚。
+
+服务器kirin无免密sudo；用户须在自己的终端输入管理员密码，禁止使用任何聊天中曾贴出的密码：
+
+```sh
+ssh -t -F /Users/kirin/go_path/jev_demo/.run/server-management/ssh_config aliyun-kirin 'sudo python3 /home/kirin/apps/s2s_demo/releases/ui-3f6501e9e9d9/deploy/update_ui.py --approve-ui-update'
+```
+
+本地更新保护测试3项通过：环境值不出现在argv、健康失败回滚原容器、不删除未知容器。
+管理员执行后再校验公网CSS/JS内容、新版页面和未认证WSS401；当前尚未宣称远端新版已生效。
+
 2026-10-18 已只读核验现有服务器 `47.116.102.49`，SSH别名 `aliyun-kirin`、用户 `kirin`。
 代码准备放在 `/home/kirin/apps/s2s_demo/releases/<commit>/`，秘密单独位于
 `/home/kirin/apps/s2s_demo/shared/.env`（0600），不从本机复制任何 Key 或口令。
