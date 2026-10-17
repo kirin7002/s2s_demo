@@ -12,7 +12,9 @@
 用户已执行新激活命令，内部登录页HTTP200、Flash配置就绪，Caddy验证/reload完成。
 回滚备份`/opt/caddy/Caddyfile.pre-s2s.2Y3yBD`；不要重复激活。
 公网TLS仍报`TLSV1_ALERT_INTERNAL_ERROR`，HTTP外网出现`Non-compliance ICP Filing`拦截，尚未验收通过。
-第一次只读日志返回匹配0条；已准备增强的同入口诊断，详见[部署说明](deployment.md)。
+增强诊断确认运行配置可读，但目标路由/证书策略不存在，49条JSON日志中目标出现0次；
+磁盘文件有目标站点，当前故障是磁盘与运行配置不一致。已准备带其他站点差异保护、备份与回滚的
+管理员修复脚本，13项模拟测试通过；尚未远端执行，详见[部署说明](deployment.md)。
 用户已确认使用`s2s.kirinxu.cn`，DNS已指向服务器，证书尚未开通；新站点CA仅固定Let's Encrypt，
 不回退ZeroSSL且不修改其他站点。kirin不能免密sudo/管理Docker，
 用户已亲自填写远端`shared/.env`并通过激活校验；未复制本地秘密，未修改安全组/防火墙。

@@ -70,6 +70,28 @@ ssh -t -F /Users/kirin/go_path/jev_demo/.run/server-management/ssh_config aliyun
 不输出原始配置。不读取.env、请求头或证书私钥，不改文件、不reload/restart、不签发证书、不调用模型。
 管理员权限仅用于此次状态与日志读取。
 
+## 新站点未加载时的修复
+
+用户回传诊断确认`active_config_readable=true`，但目标路由、显式证书策略均不存在，
+49条JSON日志中目标域名出现0次；磁盘Caddyfile则有且只有一个目标站点。
+因此当前首先需要解决磁盘配置与运行配置不一致，再验收证书；尚不能据此认定ACME失败原因。
+可能存在旧的单文件Docker挂载，需修复输出`mounted_file_matches_host`进一步确认。
+
+已准备[管理员修复脚本](../deploy/repair_caddy_s2s.py)，上传到同一staging目录。
+它先验证“磁盘配置移除原样S2S站点后”与当前运行配置完全一致，否则停止；
+然后备份宿主文件、容器挂载文件及运行JSON到root专用0700目录，文件0600。
+同步已有挂载文件，通过stdin加载已验证的配置，并核验实际运行JSON。
+失败时恢复原挂载内容和原运行配置。无需重新构建或重启任何容器；
+重载仍可能关闭既有WebSocket连接，并启动此前已批准的目标站点LE证书申请。
+不读取应用.env、不调用模型。命令由用户在自己的终端输入sudo密码执行：
+
+```sh
+ssh -t -F /Users/kirin/go_path/jev_demo/.run/server-management/ssh_config aliyun-kirin 'sudo python3 /home/kirin/apps/s2s_demo/staging/tls-diagnostics/repair_caddy_s2s.py --apply-approved-site && sudo bash /home/kirin/apps/s2s_demo/staging/tls-diagnostics/collect-caddy-tls.sh'
+```
+
+本地13项诊断/修复测试通过，包括拒绝其他站点差异、同步旧挂载和重载失败回滚。
+尚未执行远端管理员修复，证书及公网访问仍待验证。
+
 ## 先前准备与验收边界
 
 Dockerfile 只准备运行镜像，尚未构建验证；不创建云资源，不推镜像，不更改安全组。镜像内服务仍只监听 `127.0.0.1:8080`，没有公开端口。后续需结合实际反代拓扑审阅绑定方式，不能直接以 `-p` 期待访问环回服务。
