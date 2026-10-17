@@ -1,3 +1,8 @@
 s2s.kirinxu.cn {
+    tls {
+        issuer acme {
+            ca https://acme-v02.api.letsencrypt.org/directory
+        }
+    }
     reverse_proxy 127.0.0.1:8080
 }

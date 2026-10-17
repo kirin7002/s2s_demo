@@ -8,11 +8,17 @@
 
 服务器现有 Docker Caddy 使用 `/opt/caddy/Caddyfile`，80/443已开放并监听；既有主站等保持原样。
 `s2s.kirinxu.cn` 的现有DNS已解析到该服务器，目前没有可用证书。
-准备的 [站点配置](../deploy/Caddyfile.s2s) 只新增此子域名，由Caddy申请可信证书并转发HTTPS/WSS。
+用户已明确确认使用此域名，不再重复确认。准备的 [站点配置](../deploy/Caddyfile.s2s) 只新增此子域名，
+仅对此站点显式配置一个ACME issuer：`https://acme-v02.api.letsencrypt.org/directory`。
+因此该站点只向Let's Encrypt申请/续期，不回退ZeroSSL，不修改其他站点的CA策略。
+管理员激活前应审阅并接受[Let's Encrypt当前订户协议](https://letsencrypt.org/documents/LE-SA-v1.8-July-06-2026.pdf)；
+此链接已通过官方ACME目录的`termsOfService`字段核对。当前尚未签发或激活。
 不买域名、不开新公网端口、不改防火墙或安全组。Caddy的WebSocket代理默认支持升级，无默认流超时：
 [官方反代文档](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy)。
 
 无秘密代码已上传到`/home/kirin/apps/s2s_demo/releases/3f670692f010`，空白远端.env已创建为0600。
+该目录保留为旧版；固定LE的最终准备版使用独立目录
+`/home/kirin/apps/s2s_demo/releases/20261018-le-only`，激活请仅使用下方新命令。
 服务器Python3.12.3、独立check-venv中的aiohttp3.14.5；系统ensurepip不可用，已用现有pip的
 `--python`选项安装到`--without-pip`用户venv，没有修改系统包。禁用模型的真实进程检查通过：
 登录页、预览登录、对话页和全部静态资源HTTP200，`ready=false`，已认证`/ws`返回503。
@@ -35,10 +41,10 @@ reload可能关闭既有WebSocket连接，需要接受一次配置重载的影�
 文件沿用本项目字面解析规则，不执行shell；脚本不打印值，不把值放进argv或镜像。
 不要把本机.env传上去，不在聊天中粘贴秘密。激活脚本先清除继承的模型配置，使用远端文件。
 
-在确认新增公开域名和证书后，用户在已登录的服务器终端运行：
+域名已获确认。用户安全填写远端秘密、管理员审阅LE证书条款后，在已登录的服务器终端运行：
 
 ```sh
-sudo bash /home/kirin/apps/s2s_demo/releases/<commit>/deploy/activate-aliyun.sh --approve-public-site
+sudo bash /home/kirin/apps/s2s_demo/releases/20261018-le-only/deploy/activate-aliyun.sh --approve-public-site
 ```
 
 管理员密码只在用户自己的终端输入，不交给Codex。脚本不会自动进行模型握手、音频或生成。
