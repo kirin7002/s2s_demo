@@ -38,10 +38,11 @@ class Harness:
                     # Malformed unnegotiated RSV1 frame, not a provider JSON error.
                     request.transport.write(b"\xc1\x00")
                 elif self.mode == "oversized_control":
-                    # RFC 6455 control frames cannot use a payload length of 126.
+                    # Match the observed upstream CLOSE: code 1007, 178 bytes.
+                    # RFC 6455 control payloads must not exceed 125 bytes.
                     # Synthetic reason must never be forwarded or logged.
-                    payload = b"\x03\xf0" + b"sensitive-frame-payload".ljust(124, b"x")
-                    request.transport.write(b"\x88\x7e\x00\x7e" + payload)
+                    payload = b"\x03\xef" + b"sensitive-frame-payload".ljust(176, b"x")
+                    request.transport.write(b"\x88\x7e\x00\xb2" + payload)
                 elif self.mode == "error":
                     await ws.send_json({"type": "error", "error": {"message": "sensitive-upstream-detail"}})
                 else:
