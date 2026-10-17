@@ -12,6 +12,12 @@
 不买域名、不开新公网端口、不改防火墙或安全组。Caddy的WebSocket代理默认支持升级，无默认流超时：
 [官方反代文档](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy)。
 
+无秘密代码已上传到`/home/kirin/apps/s2s_demo/releases/3f670692f010`，空白远端.env已创建为0600。
+服务器Python3.12.3、独立check-venv中的aiohttp3.14.5；系统ensurepip不可用，已用现有pip的
+`--python`选项安装到`--without-pip`用户venv，没有修改系统包。禁用模型的真实进程检查通过：
+登录页、预览登录、对话页和全部静态资源HTTP200，`ready=false`，已认证`/ws`返回503。
+本次专属检查进程已停止，没有启动公网容器或修改Caddy。
+
 应用容器使用现有Caddy的网络命名空间，仍只监听该命名空间的127.0.0.1:8080；不映射主机端口。
 因此无需把Python绑定改成0.0.0.0。应用具有只读根文件系统、无额外capability和资源上限。
 若以后重建Caddy容器，需相应重建s2s容器以共享新的命名空间。
