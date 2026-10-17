@@ -289,7 +289,7 @@ class ConfigurationTests(unittest.TestCase):
         from unittest.mock import patch
         values = {"DASHSCOPE_API_KEY": "local-placeholder", "S2S_DEMO_PASSWORD": "local-placeholder", "S2S_ENABLE_LIVE": "1"}
         with patch("gateway.config.os.getenv", side_effect=lambda name, default=None: values.get(name, default)):
-            cfg = Config.from_env()
+            cfg = Config.from_env(env_file=None)
         self.assertIsNone(cfg.problem())
         self.assertEqual(cfg.workspace, "")
         self.assertTrue(cfg.url.startswith("wss://dashscope.aliyuncs.com/"))

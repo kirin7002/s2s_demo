@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 import os
 import re
 from urllib.parse import urlencode
+from .envfile import DEFAULT_ENV_FILE, read_env_file
 
 
 @dataclass(frozen=True)
@@ -21,15 +22,19 @@ class Config:
     idle_seconds: float = 60
 
     @classmethod
-    def from_env(cls):
-        return cls(api_key=os.getenv("DASHSCOPE_API_KEY", ""),
-                   demo_password=os.getenv("S2S_DEMO_PASSWORD", ""),
-                   workspace=os.getenv("QWEN_WORKSPACE_ID", ""),
-                   region=os.getenv("QWEN_REGION", "cn-beijing"),
-                   model=os.getenv("QWEN_MODEL", "qwen-audio-3.0-realtime-plus"),
-                   voice=os.getenv("QWEN_VOICE", ""),
-                   live_enabled=os.getenv("S2S_ENABLE_LIVE") == "1",
-                   origin=os.getenv("S2S_ORIGIN", "http://127.0.0.1:8080"))
+    def from_env(cls, env_file=DEFAULT_ENV_FILE):
+        values = read_env_file(env_file)
+        # A supplied process variable wins even when its value is empty.
+        def get(name, default=""):
+            return os.getenv(name, values.get(name, default))
+        return cls(api_key=get("DASHSCOPE_API_KEY"),
+                   demo_password=get("S2S_DEMO_PASSWORD"),
+                   workspace=get("QWEN_WORKSPACE_ID"),
+                   region=get("QWEN_REGION", "cn-beijing"),
+                   model=get("QWEN_MODEL", "qwen-audio-3.0-realtime-plus"),
+                   voice=get("QWEN_VOICE"),
+                   live_enabled=get("S2S_ENABLE_LIVE") == "1",
+                   origin=get("S2S_ORIGIN", "http://127.0.0.1:8080"))
 
     def problem(self):
         if not self.live_enabled:
