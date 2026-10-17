@@ -32,5 +32,13 @@ Audio 默认使用北京公共端点 `wss://dashscope.aliyuncs.com/api-ws/v1/rea
 ## 独立接口
 
 产品身份为个人助理 Agent；StackChan 是可接入的设备工具。`gateway/ports.py` 定义 MemoryHub / ToolExecutor 类型契约，
-尚无运行时实现、数据库、同步、离线任务、MCP或工具声明。不能把模型上下文当作持久记忆，
-也不能把协议设计完成当作设备已连接或动作已执行。后续实现遵循[StackChan接入约定](stackchan-integration.md)。
+Memory Hub仍无运行时实现、数据库、同步或离线任务，MCP留作后续适配。StackChan原生Function Calling、
+授权绑定与设备路由已在现有进程实现，默认关闭；不能把模型上下文当作持久记忆，
+也不能把模拟执行当作真实机器人动作。实现与配置见[StackChan接入约定](stackchan-integration.md)。
+
+Audio工具声明使用`session.update.session.tools[].function`，只在授权绑定会话注册。
+协调器只接受`response.function_call_arguments.done`的完整参数，等待原`response.done`确认成功结束后，
+按`output_index`串行执行，再以`conversation.item.create/function_call_output`逐项回填。
+所有结果结算、当前响应仍有效且用户没有开始说话时，最多发送一次`response.create`。
+这些字段已按[官方Audio Function Calling指南](https://www.alibabacloud.com/help/en/model-studio/qwen-audio-realtime-user-guides)
+和[服务端事件](https://help.aliyun.com/en/model-studio/qwen-audio-realtime-server-events)核对，尚未用真实模型验收。

@@ -20,6 +20,11 @@ class Config:
     max_seconds: float = 600
     handshake_seconds: float = 15
     idle_seconds: float = 60
+    stackchan_enabled: bool = False
+    stackchan_device_id: str = ""
+    stackchan_device_token: str = field(default="", repr=False)
+    device_ack_seconds: float = 1.5
+    device_keepalive_seconds: float = 10
 
     @classmethod
     def from_env(cls, env_file=DEFAULT_ENV_FILE):
@@ -34,7 +39,16 @@ class Config:
                    model=get("QWEN_MODEL", "qwen-audio-3.0-realtime-flash"),
                    voice=get("QWEN_VOICE"),
                    live_enabled=get("S2S_ENABLE_LIVE") == "1",
-                   origin=get("S2S_ORIGIN", "http://127.0.0.1:8080"))
+                   origin=get("S2S_ORIGIN", "http://127.0.0.1:8080"),
+                   stackchan_enabled=get("S2S_STACKCHAN_ENABLED") == "1",
+                   stackchan_device_id=get("S2S_STACKCHAN_DEVICE_ID"),
+                   stackchan_device_token=get("S2S_STACKCHAN_DEVICE_TOKEN"))
+
+    @property
+    def stackchan_configured(self):
+        return bool(self.stackchan_enabled
+                    and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", self.stackchan_device_id)
+                    and re.fullmatch(r"[A-Za-z0-9_-]{32,256}", self.stackchan_device_token))
 
     def problem(self):
         if not self.live_enabled:
@@ -74,20 +88,28 @@ class Config:
             raise ValueError("Omni requires a workspace endpoint")
         return f"wss://{host}/api-ws/v1/realtime?" + urlencode({"model": self.model})
 
-    def session_update(self):
+    def session_update(self, stackchan_tools=None):
         instructions = (
             "你是用户的个人助理 Agent。请用简洁自然的中文交流，帮助用户解答问题、思考和规划日常事务。"
             "StackChan 是可接入的设备工具，用于动作、表情、灯光和屏幕显示；仅在设备已连接、"
             "会话已授权且相应工具实际可用时调用。设备确认接收不代表执行完成，执行状态必须依据真实回执。"
-            "当前版本未接通 StackChan、其他外部工具或持久记忆；不要声称已操控设备、完成外部操作"
-            "或跨会话保存了记忆。"
+            "持久记忆尚未接入，不要声称跨会话保存了记忆。"
         )
+        if stackchan_tools and self.is_audio:
+            instructions += ("当前会话已注册 StackChan 工具；请先查询设备状态和能力，仅使用设备公布的能力。"
+                             "accepted仅代表接纳，请查询命令结果再声称完成；超时未知时不要重复物理动作。"
+                             "工具结果simulated=true时明确说明仅为模拟执行，不能声称真实机器人已动作；"
+                             "simulated未知时也不能声称真实设备已执行。"
+                             "同一设备的动作可先停止再执行，不根据固定话术强制动作。其他外部工具未启用。")
+        else:
+            instructions += "当前会话未启用 StackChan 或其他外部工具，不要声称已操控设备或完成外部操作。"
         if self.is_audio:
             voice = self.voice or ("longanqian_v3.1" if "3.1" in self.model else "longanqian")
             return {"type": "session.update", "session": {
                 "modalities": ["text", "audio"], "voice": voice,
                 "input_audio_format": "pcm", "output_audio_format": "pcm",
                 "turn_detection": {"type": "smart_turn"}, "instructions": instructions,
+                **({"tools": stackchan_tools} if stackchan_tools else {}),
             }}
         return {"type": "session.update", "session": {
             "modalities": ["text", "audio"],

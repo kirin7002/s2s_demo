@@ -1,7 +1,8 @@
 # S2S 个人助理 Agent
 
 通过手机持续语音与个人助理交流，帮助解答问题、思考和规划日常事务。StackChan 是可接入的设备工具，
-可用于动作、表情、灯光与屏幕显示；目前工具闭环、设备绑定及WSS设备路由尚未实现，持久记忆也未接入。
+可用于动作、表情、灯光与屏幕显示。网关已实现可选设备绑定、设备WebSocket路由和原生函数调用闭环，
+默认关闭，已通过本机模拟器联调；真实设备与模型组合尚未验收，持久记忆未接入。
 能力与执行结果必须依据实际可用工具和真实设备回执，接纳命令不等于执行完成。
 
 当前默认 **`qwen-audio-3.0-realtime-flash`**，移动网页 → 同源 Python 网关 → 阿里云 Qwen-Audio Realtime WebSocket。代码已实现，尚未完成真实语音或手机麦克风联调。没有自动部署。
@@ -37,6 +38,9 @@ Mac 已准备项目的启动命令与本次验证结果见 [Mac 本地启动](do
 | `S2S_ENABLE_LIVE` | 默认关闭；显式 `1` 才允许出站模型连接 |
 | `S2S_DEMO_PASSWORD` | 未设置；真实模式必需的演示登录口令，运行时注入 |
 | `S2S_ORIGIN` | `http://127.0.0.1:8080`；必须精确匹配访问网页的 Origin |
+| `S2S_STACKCHAN_ENABLED` | 默认 `0`；设为 `1` 且下两项有效才开放设备路由 |
+| `S2S_STACKCHAN_DEVICE_ID` | 单个演示设备的固定ID；1–64个字母、数字、下划线或短横线 |
+| `S2S_STACKCHAN_DEVICE_TOKEN` | 独立设备Bearer凭据，32–256个字母、数字、下划线或短横线；只在服务端/设备端安全配置 |
 
 默认完整地址（无需 Workspace ID）：
 
@@ -72,11 +76,12 @@ export QWEN_MODEL=qwen-audio-3.0-realtime-flash
 ```sh
 pip install -r requirements-dev.txt
 python -m unittest tests.test_gateway -v
+python -m unittest tests.test_stackchan -v
 python -m unittest tests.test_browser -v
 node --test tests/test_capture.js
 ```
 
-浏览器测试使用本环境 `/usr/bin/chromium`；其他环境可调整 `tests/test_browser.py` 的 `executable_path`。所有上游均为仅绑定本机的测试 WebSocket，麦克风是 Chromium 合成音频；权限/系统中断情境由测试注入，不代表真机验收。详见 [验证记录](docs/validation.md)。
+浏览器测试优先使用Mac已安装的Chrome或Linux Chromium，可用`S2S_TEST_BROWSER`指定路径。所有上游均为仅绑定本机的测试 WebSocket，麦克风是 Chromium 合成音频；权限/系统中断情境由测试注入，不代表真机验收。详见 [验证记录](docs/validation.md)。
 
 ## 边界与设计
 
@@ -84,5 +89,11 @@ node --test tests/test_capture.js
 
 服务仅绑定 `127.0.0.1:8080`，默认关闭真实模型；入口为 `/login` 和 `/chat` 两页。登录使用演示口令与内存 Cookie 会话，未配置口令且未启用模型时明确显示本地预览。Origin 校验用于浏览器同源约束。当前适合本机开发，不能直接作为公网多用户服务。后续部署前需加入正式账户鉴权、按用户预算/限流与可信 HTTPS 反代，不修改云安全组来绕过约束。
 
-工具、外部 Memory Hub 仅有 [Python 接口](gateway/ports.py)，运行时不调用。StackChan工具与持久记忆尚未接入，
-没有记忆存储/同步或离线任务。[协议选型](docs/protocol.md) · [StackChan接入约定](docs/stackchan-integration.md) · [部署准备](docs/deployment.md)。
+StackChan配置完成后，登录用户须在通话页主动关联唯一配置设备，下次语音会话才注册四个工具；
+未关联时模型没有设备工具。一个语音会话独占动作控制，其他会话收到`DEVICE_BUSY`，不抢占。
+设备主动连接`/device/v1/ws`，公网须经可信TLS反代使用WSS；本轮没有部署该版本或调整反代。
+所有工具结果区分`simulated=true/false/null`；模拟执行不能声称真实机器人已动作，未知标记也不能作为真实执行证据。
+详情及本机模拟联调命令见[StackChan接入约定](docs/stackchan-integration.md)。
+
+外部Memory Hub仍仅有[Python接口](gateway/ports.py)，没有记忆存储/同步或离线任务；MCP尚未实现。
+[协议选型](docs/protocol.md) · [部署准备](docs/deployment.md)。

@@ -13,6 +13,8 @@ import time
 from aiohttp import ClientError, ClientSession, ClientTimeout, WSMsgType, WSServerHandshakeError, web
 from aiohttp.http_websocket import WebSocketError
 from .config import Config
+from .stackchan import DeviceHub, QWEN_TOOLS
+from .tool_calls import ToolCalls, ToolProtocolError
 
 ROOT = Path(__file__).resolve().parent.parent / "web"
 CONFIG = web.AppKey("config", Config)
@@ -22,6 +24,7 @@ CONNECTOR = web.AppKey("connector", object)
 LOGINS = web.AppKey("logins", dict)
 ATTEMPTS = web.AppKey("attempts", dict)
 OWNERS = web.AppKey("owners", dict)
+DEVICES = web.AppKey("devices", DeviceHub)
 LOGGER = logging.getLogger(__name__)
 STAGES = {"connect": "上游握手", "session_created": "等待会话创建",
           "session_updated": "等待音频配置确认", "streaming": "语音会话"}
@@ -80,6 +83,7 @@ async def logout(request):
         raise web.HTTPForbidden()
     token = request.cookies.get("s2s_session")
     request.app[LOGINS].pop(token, None)
+    await request.app[DEVICES].revoke(token)
     # Revoke already-open model sessions in other tabs as well as future upgrades.
     await asyncio.gather(*(ws.close(code=1008, message=b"Logged out")
                            for ws, owner in list(request.app[OWNERS].items()) if owner == token))
@@ -116,7 +120,7 @@ def upstream_frame_error(error, close_code):
 
 
 class Session:
-    def __init__(self, browser, config, connect):
+    def __init__(self, browser, config, connect, device_control=None):
         self.browser, self.config, self.connect = browser, config, connect
         self.upstream = None
         self.connect_task = None
@@ -127,6 +131,8 @@ class Session:
         self.audio_window = time.monotonic()
         self.audio_bytes = 0
         self.stage = "connect"
+        self.tools = ToolCalls(device_control, self.upstream_send,
+                               lambda message: self.emit('notice', message=message)) if device_control else None
 
     async def emit(self, kind, **fields):
         await asyncio.wait_for(self.browser.send_json({"type": kind, **fields}), 5)
@@ -136,6 +142,8 @@ class Session:
 
     async def interrupt(self, automatic=False):
         self.suppressed = True
+        if self.tools:
+            self.tools.invalidate()
         if self.responding and not self.cancel_pending and not (automatic and self.config.is_audio):
             self.cancel_pending = True
             await self.upstream_send({"type": "response.cancel"})
@@ -206,7 +214,7 @@ class Session:
         async with asyncio.timeout(self.config.handshake_seconds):
             while (await self.receive_event())["type"] != "session.created":
                 pass
-            await self.upstream_send(self.config.session_update())
+            await self.upstream_send(self.config.session_update(QWEN_TOOLS if self.tools else None))
             self.stage = "session_updated"
             while (await self.receive_event())["type"] != "session.updated":
                 pass
@@ -216,6 +224,11 @@ class Session:
         while True:
             event = await self.receive_event(self.config.idle_seconds)
             kind = event["type"]
+            if self.tools:
+                try:
+                    self.tools.handle(event)
+                except ToolProtocolError:
+                    raise ProtocolError('工具调用协议无效；设备动作未重试。', 'TOOL_PROTOCOL_ERROR') from None
             if kind == "response.created":
                 self.responding, self.cancel_pending, self.suppressed = True, False, False
                 await self.emit("responding")
@@ -274,6 +287,8 @@ class Session:
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            if self.tools:
+                await self.tools.close()
             if self.connect_task is not None:
                 with contextlib.suppress(Exception):
                     self.upstream = await self.connect_task
@@ -315,7 +330,8 @@ async def socket(request):
             return await request.app[CLIENT].ws_connect(
                 cfg.url, headers={"Authorization": f"Bearer {cfg.api_key}"},
                 heartbeat=20, max_msg_size=2 * 1024 * 1024)
-        await Session(browser, cfg, connect).run()
+        control = request.app[DEVICES].for_owner(request.cookies.get('s2s_session')) if cfg.is_audio else None
+        await Session(browser, cfg, connect, control).run()
     finally:
         active.discard(reservation)
         active.discard(browser)
@@ -325,11 +341,46 @@ async def socket(request):
 
 async def metadata(request):
     cfg = request.app[CONFIG]
+    bound = authenticated(request) and request.cookies.get('s2s_session') in request.app[DEVICES].bindings
     return web.json_response({"provider": "Alibaba Cloud Qwen Realtime", "model": cfg.model,
                               "region": cfg.region, "ready": cfg.problem() is None,
                               "message": cfg.problem(), "memory": "external interface only",
                               "password_required": bool(cfg.demo_password) or cfg.live_enabled,
-                              "tools": "disabled"})
+                              "tools": "available_on_next_session" if bound and cfg.is_audio else "disabled"})
+
+
+async def device_binding(request):
+    if not authenticated(request):
+        raise web.HTTPUnauthorized()
+    hub, token = request.app[DEVICES], request.cookies.get('s2s_session')
+    for owner in list(hub.bindings):
+        if owner not in request.app[LOGINS]:
+            await hub.revoke(owner)
+    if request.method == 'POST':
+        if request.headers.get('Origin') != request.app[CONFIG].origin:
+            raise web.HTTPForbidden()
+        if request.content_length is None or request.content_length > 1024:
+            raise web.HTTPBadRequest()
+        try:
+            value = await request.json()
+        except ValueError:
+            raise web.HTTPBadRequest() from None
+        if not isinstance(value, dict) or set(value) != {'device_id'}:
+            raise web.HTTPBadRequest()
+        if value['device_id'] is None:
+            await hub.revoke(token)
+        elif not hub.config.stackchan_configured or value['device_id'] != hub.config.stackchan_device_id:
+            raise web.HTTPForbidden()
+        else:
+            hub.bindings[token] = hub.config.stackchan_device_id
+    connection = hub.connection
+    simulated = connection.capabilities.get('simulated') if connection else None
+    return web.json_response({'configured': hub.config.stackchan_configured,
+                              'device_id': hub.config.stackchan_device_id if hub.config.stackchan_configured else None,
+                              'bound': token in hub.bindings,
+                              'online': bool(connection and connection.online),
+                              'simulated': simulated if type(simulated) is bool else None,
+                              'tools_registered_on_next_call': token in hub.bindings and request.app[CONFIG].is_audio})
 
 
 async def asset(request):
@@ -373,6 +424,7 @@ def create_app(config=None, connector=None):
     app = web.Application(middlewares=[security_headers])
     app[CONFIG], app[ACTIVE] = config or Config.from_env(), set()
     app[LOGINS], app[ATTEMPTS], app[OWNERS] = {}, {}, {}
+    app[DEVICES] = DeviceHub(app[CONFIG])
     if connector is not None:
         app[CONNECTOR] = connector
     async def resources(app):
@@ -382,11 +434,15 @@ def create_app(config=None, connector=None):
     async def shutdown(app):
         await asyncio.gather(*(ws.close(code=1001, message=b"Server shutdown")
                                for ws in list(app[ACTIVE]) if hasattr(ws, "close")))
+        await app[DEVICES].close()
     app.cleanup_ctx.append(resources)
     app.on_shutdown.append(shutdown)
     app.router.add_get("/api/config", metadata)
     app.router.add_post("/api/login", login)
     app.router.add_post("/api/logout", logout)
+    app.router.add_get('/api/stackchan', device_binding)
+    app.router.add_post('/api/stackchan/bind', device_binding)
+    app.router.add_get('/device/v1/ws', app[DEVICES].device_socket)
     app.router.add_get("/ws", socket)
     app.router.add_get("/", entry)
     app.router.add_get("/login", login_page)

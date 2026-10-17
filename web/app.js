@@ -1,6 +1,7 @@
 const el = id => document.getElementById(id);
 let current = null, generation = 0, config = null;
 let assistant = null;
+let device = null, bindingBusy = false;
 function status(title, detail = '', state) {
   el('status').textContent = title; el('detail').textContent = detail;
   if (state) document.body.dataset.callState = state;
@@ -11,6 +12,7 @@ function buttons(busy, ready = false) {
   el('stop-label').textContent = ready ? '挂断' : '取消';
   el('stop').setAttribute('aria-label', ready ? '挂断语音通话' : '取消连接');
   document.body.dataset.callState = ready ? 'listening' : busy ? 'connecting' : 'idle';
+  el('device-bind').disabled = busy || bindingBusy || !device?.configured;
   if (!busy) {
     el('mute').setAttribute('aria-pressed', 'false'); el('mute-label').textContent = '静音';
   }
@@ -72,7 +74,7 @@ function play(s, bytes) {
   source.start(at); s.nextTime = at + buffer.duration;
 }
 async function start() {
-  if (current) return;
+  if (current || bindingBusy) return;
   const s = { id: ++generation, abort: new AbortController(), playing: new Set(), nextTime: 0, ready: false };
   current = s; assistant = null; buttons(true); status('准备连接', '正在检查配置…');
   el('duration').hidden = true; el('duration').textContent = '00:00';
@@ -175,7 +177,36 @@ window.addEventListener('offline', () => { if (current) finish(current, '网络�
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && current) finish(current, '页面已进入后台', '麦克风已释放，返回后可重新连接。');
 });
+function renderDevice() {
+  el('device-panel').hidden = !device?.configured;
+  document.body.classList.toggle('has-device', Boolean(device?.configured));
+  if (!device?.configured) return;
+  const kind = device.simulated === true ? '模拟设备 · ' : device.simulated === false ? '真实设备 · ' : '';
+  el('device-status').textContent = `${kind}${device.online ? '在线' : '离线'} · ${device.bound ? '已关联，下次接通生效' : '关联后允许助理调用'}`;
+  el('device-bind').textContent = device.bound ? '取消关联' : '关联设备';
+  el('device-bind').disabled = Boolean(current) || bindingBusy;
+}
+async function refreshDevice() {
+  try {
+    const response = await fetch('/api/stackchan', { signal: AbortSignal.timeout(5000) });
+    if (!response.ok) return;
+    device = await response.json(); renderDevice();
+  } catch { if (device?.configured) el('device-status').textContent = '设备状态暂不可用'; }
+}
+el('device-bind').onclick = async () => {
+  if (current || bindingBusy || !device?.configured) return;
+  bindingBusy = true; el('start').disabled = true; renderDevice();
+  try {
+    const response = await fetch('/api/stackchan/bind', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_id: device.bound ? null : device.device_id }), signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error();
+    device = await response.json();
+  } catch { el('detail').textContent = '设备关联未确认，请刷新后重试。'; }
+  finally { bindingBusy = false; el('start').disabled = Boolean(current); renderDevice(); }
+};
+refreshDevice();
+window.addEventListener('focus', () => { if (!current && !bindingBusy) refreshDevice(); });
 fetch('/api/config').then(r => r.json()).then(c => {
   config = c; el('model').textContent = c.model === 'qwen-audio-3.0-realtime-flash' ? 'Qwen Audio · Flash' : c.model;
-  el('config').textContent = c.ready ? '接通与个人助理对话 · StackChan 工具待接入' : c.message;
+  el('config').textContent = c.ready ? '接通与个人助理对话 · 设备能力以实际回执为准' : c.message;
 }).catch(() => { el('config').textContent = '无法读取服务配置。'; });

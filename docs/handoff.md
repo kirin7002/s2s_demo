@@ -6,10 +6,20 @@
 
 ## 最新状态：2026-10-18
 
-产品定位调整为个人助理 Agent；StackChan 是待接入设备工具。系统提示、登录/通话页及README已统一，
-不声称尚未接通的设备、外部工具或持久记忆可用。最新双方约定见[StackChan接入约定](stackchan-integration.md)。
-用户已批准后续云端首版开发：在现有Python网关接入授权绑定、WSS设备路由和四个原生函数工具，
-先做模拟设备和本地测试。本轮不部署、不改云资源、不调用真实模型。
+产品定位已调整为个人助理 Agent，定位提交`7e558d4`保存在本地。随后按用户批准完成StackChan网关首版：
+`gateway/stackchan.py`负责设备Bearer认证、单配置设备与登录会话绑定、WebSocket路由、ACK/状态/租约；
+`gateway/tool_calls.py`负责四个原生函数、完整参数、call_id去重、output_index串行、独立response_epoch与设备generation，
+stop/perform栅栏、用户打断及挂断取消。默认关闭，须由用户安全配置设备凭据并在页面主动关联。
+所有工具结果均保留simulated；模拟器结果不得声称真实机器人已动。新增错误白名单包括
+SCHEDULER_OVERRUN、LEASE_EXPIRED、LOCAL_STOP。设备控制工具、能力边界和本机联调入口见
+[StackChan接入约定](stackchan-integration.md)。持久记忆和MCP尚未实现。
+
+本轮没有部署、推送、修改云资源、读取/复制真实凭据或调用真实模型；公网仍是此前用户部署的版本。
+与StackChan仓库的编译后C++核心端到端11项检查通过；这是本机WS+模拟Qwen，不是物理机器人或公网WSS验收。
+本机协议与故障回归新增24项，浏览器新增1项主动关联测试；完整检查记录见[验证记录](validation.md)。
+最终完整Python回归100项（含15项Chrome浏览器）、JS采集4项和编译后C++模拟器端到端11项均通过。
+六个模型配置除提示词和明确授权后的工具声明外保持不变，默认Flash、longanqian、smart_turn与16k/24kPCM不变。
+没有启动新的常驻预览进程，旧PID和下文旧测试数量均为历史记录，操作前须重新核验。
 
 用户要求Apple/Skype风格移动通话页，并要求发布到现有站点。UI提交`3f6501e`：
 上方本次对话记录、底部圆形接通/挂断、静音/打断、通话计时，保留登录及Flash。

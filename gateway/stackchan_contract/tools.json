@@ -1,0 +1,224 @@
+{
+  "contract_version": "0.1.0",
+  "status": "design",
+  "tools": [
+    {
+      "name": "stackchan_get_state",
+      "description": "Read the currently bound StackChan device state and advertised capabilities, including online/freshness flags, calibration, enabled channels, pose limits and supported expressions. This does not control hardware.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "stackchan_perform",
+      "description": "Execute a bounded sequence of head poses, light settings and screen frames chosen by the agent. Returns accepted only after device acknowledgement; accepted does not mean completed. Query stackchan_get_command for completion. Device selection and authorization are supplied by the gateway session.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 8000
+          },
+          "frames": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "at_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 7900
+                },
+                "head": {
+                  "type": "object",
+                  "properties": {
+                    "yaw_deg": {
+                      "type": "number",
+                      "minimum": -60,
+                      "maximum": 60
+                    },
+                    "pitch_deg": {
+                      "type": "number",
+                      "minimum": -25,
+                      "maximum": 25
+                    },
+                    "move_ms": {
+                      "type": "integer",
+                      "minimum": 100,
+                      "maximum": 4000
+                    }
+                  },
+                  "required": [
+                    "yaw_deg",
+                    "pitch_deg",
+                    "move_ms"
+                  ],
+                  "additionalProperties": false,
+                  "description": "Absolute pose in calibrated robot coordinates: positive yaw is robot-right, positive pitch is up; zero is calibrated neutral. Device capability bounds may be narrower. Requires head.enabled and valid calibration."
+                },
+                "light": {
+                  "type": "object",
+                  "properties": {
+                    "rgb": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 255
+                      },
+                      "minItems": 3,
+                      "maxItems": 3
+                    },
+                    "brightness": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "fade_ms": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 4000
+                    }
+                  },
+                  "required": [
+                    "rgb",
+                    "brightness",
+                    "fade_ms"
+                  ],
+                  "additionalProperties": false,
+                  "description": "Set all body RGB LEDs together. Brightness is multiplied by the locally enforced device brightness ceiling."
+                },
+                "screen": {
+                  "type": "object",
+                  "properties": {
+                    "page": {
+                      "type": "string",
+                      "enum": [
+                        "face",
+                        "text"
+                      ]
+                    },
+                    "expression": {
+                      "type": "string",
+                      "enum": [
+                        "neutral",
+                        "happy",
+                        "laughing",
+                        "scared",
+                        "sad",
+                        "surprised",
+                        "thinking"
+                      ]
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    }
+                  },
+                  "required": [
+                    "page"
+                  ],
+                  "additionalProperties": false,
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "page": {
+                          "const": "face"
+                        }
+                      },
+                      "required": [
+                        "expression"
+                      ],
+                      "not": {
+                        "required": [
+                          "text"
+                        ]
+                      }
+                    },
+                    {
+                      "properties": {
+                        "page": {
+                          "const": "text"
+                        }
+                      },
+                      "required": [
+                        "text"
+                      ],
+                      "not": {
+                        "required": [
+                          "expression"
+                        ]
+                      }
+                    }
+                  ],
+                  "description": "Use only expressions/pages advertised by the device. Text is plain Unicode, at most 80 code points, with no markup or network asset URLs."
+                }
+              },
+              "required": [
+                "at_ms"
+              ],
+              "additionalProperties": false,
+              "anyOf": [
+                {
+                  "required": [
+                    "head"
+                  ]
+                },
+                {
+                  "required": [
+                    "light"
+                  ]
+                },
+                {
+                  "required": [
+                    "screen"
+                  ]
+                }
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 16
+          }
+        },
+        "required": [
+          "duration_ms",
+          "frames"
+        ],
+        "additionalProperties": false,
+        "description": "Schedule bounded hardware frames on the bound device. Frames are strictly increasing in at_ms, first at_ms is zero, all transitions finish by duration_ms, and transitions on the same channel must not overlap. One running command per device; BUSY is an error. These cross-field conditions are enforced by the executor in addition to schema validation."
+      }
+    },
+    {
+      "name": "stackchan_get_command",
+      "description": "Read the latest observed status of a command for the current binding. UNKNOWN means completion is unconfirmed; do not automatically repeat physical actions.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "command_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          }
+        },
+        "required": [
+          "command_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "stackchan_stop",
+      "description": "Stop current motion and pending frames and clear the current display/light scene to the device idle state. The gateway invalidates in-flight commands from the previous control generation. Does not move the head home.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

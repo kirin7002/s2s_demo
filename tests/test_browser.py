@@ -151,6 +151,33 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.click("#logout")
         await self.page.wait_for_url("**/login")
 
+    async def test_device_binding_is_explicit_and_disabled_during_call(self):
+        from gateway.server import DEVICES
+        for name, value in [('stackchan_enabled', True), ('stackchan_device_id', 'local_simulator'),
+                             ('stackchan_device_token', 'synthetic-test-token-without-real-access')]:
+            object.__setattr__(self.h.cfg, name, value)
+        await self.page.reload()
+        await self.page.wait_for_function("() => !document.getElementById('device-panel').hidden")
+        self.assertIn('离线', await self.page.locator('#device-status').inner_text())
+        await self.page.click('#device-bind')
+        await self.page.wait_for_function("() => document.getElementById('device-bind').textContent === '取消关联'")
+        self.assertEqual(len(self.h.app[DEVICES].bindings), 1)
+        for width, height in [(320, 568), (390, 844)]:
+            await self.page.set_viewport_size({'width': width, 'height': height})
+            self.assertFalse(await self.page.evaluate('document.documentElement.scrollWidth > innerWidth'))
+            box = await self.page.locator('#start').bounding_box()
+            self.assertLessEqual(box['y'] + box['height'], height)
+        # No device is online, but the voice session may still query its status.
+        self.h.mode = 'normal'
+        await self.page.click('#start')
+        await self.listening()
+        self.assertTrue(await self.page.locator('#device-bind').is_disabled())
+        await self.page.click('#stop')
+        await self.released()
+        await self.page.click('#device-bind')
+        await self.page.wait_for_function("() => document.getElementById('device-bind').textContent === '关联设备'")
+        self.assertFalse(self.h.app[DEVICES].bindings)
+
     async def test_old_socket_callbacks_do_not_change_new_session(self):
         await self.page.click("#start")
         await self.listening()

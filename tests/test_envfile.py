@@ -76,12 +76,15 @@ class EnvFileTests(unittest.TestCase):
         self.assertFalse(marker.exists())
 
     def test_config_repr_and_loading_do_not_print_secrets(self):
-        self.write("DASHSCOPE_API_KEY=fake-private-key\nS2S_DEMO_PASSWORD=fake-private-pass\n")
+        self.write("DASHSCOPE_API_KEY=fake-private-key\nS2S_DEMO_PASSWORD=fake-private-pass\n"
+                   "S2S_STACKCHAN_ENABLED=1\nS2S_STACKCHAN_DEVICE_ID=demo_device\n"
+                   "S2S_STACKCHAN_DEVICE_TOKEN=fake-private-device-token-at-least-32\n")
         output = io.StringIO()
         with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
             cfg = Config.from_env(self.path)
         self.assertEqual(output.getvalue(), "")
         self.assertNotIn("fake-private", repr(cfg))
+        self.assertTrue(cfg.stackchan_configured)
 
     def test_invalid_encoding_is_redacted(self):
         self.path.write_bytes(b"DASHSCOPE_API_KEY=fake-private\xff")

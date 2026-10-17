@@ -1,5 +1,29 @@
 # 验证记录
 
+## StackChan网关首版本机验证（2026-10-18）
+
+新增`tests/test_stackchan.py`24项，覆盖登录/Origin/设备Bearer边界、授权后注册工具、设备能力与参数约束、
+完整UTF-8 envelope 8192字节上限、真实设备ACK与fresh查询、模拟标记、错误白名单、ACK丢失不重试、
+停止确认栅栏与超时恢复、控制独占/keepalive/撤权、重连新上下文不重放、终态不回退、
+等待ACK时音频继续、语音打断取消、挂断/退出释放、未确认挂断断开设备、call_id去重与冲突、
+output_index顺序、完整参数边界、逐项回填与一次续答。全部只使用本机fault fixture或模拟上游。
+
+浏览器新增设备主动关联/解除、通话中禁止切换、320×568和390×844按钮可见性测试。
+最终`.venv/bin/python -m unittest discover -v`完整100项通过，包含15项Mac Chrome浏览器测试和24项StackChan专项测试。
+已查看390×844模拟设备在线关联截图，小屏布局压缩身份区以保留圆形通话按钮；未改变音频链路。
+六个Audio/Omni配置对比确认，除提示词及Audio显式注册的工具外，型号、音色、轮次和音频字段保持一致。
+JS采集算法4项、三个JS语法检查、依赖检查和git diff空白检查通过。
+
+另实际运行StackChan仓库`python scripts/verify_s2s.py --s2s-project /Users/kirin/go_path/s2s_demo`，
+用其`firmware/.pio/build/simulator/program`编译后C++控制核心最终通过11项端到端检查：
+登录绑定、工具注册、能力发现、accepted、动作期间音频转发、stop→perform与旧动作cancelled、
+fresh完成查询、断线拒绝不排队、重连旧历史unknown；新增两项核验模拟标记贯穿工具结果和真实单调时钟下多帧点头完成。
+模拟器明确标记simulated=true；
+未使用native单元测试二进制代替控制核心模拟器，也未重复实现Python调度器。
+
+本轮未部署、改云资源、连接真实模型或驱动物理设备。可信公网WSS、物理硬件标定/限位、
+真实手机语音与模型调用的组合仍待单独授权验收；当前没有接口契约阻塞。
+
 ## 移动通话界面本地验证（2026-10-18）
 
 对话页改为浅色通话布局：对话记录在上方独立滚动，底部中央圆形接通/挂断按钮、
