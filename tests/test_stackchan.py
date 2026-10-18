@@ -197,6 +197,8 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn('仅表情或灯光不得添加head', tools['instructions'])
         self.assertNotIn('未要求改变的输出不要擅自改动', tools['instructions'])
         for text in ('非语言表达载体', '默认主动规划一次轻量姿态表达', '先按语义选择并调用目标工具',
+                     '左右方向交替的多个yaw目标', '单向转头不是摇头', 'pitch俯仰往返',
+                     '幅度、中心和节奏由你按上下文自由选择',
                      '长信息回答、引用文本、上下文不适合时不强行动', '不每句必动', '保持不动时优先不动',
                      '语音仍简短直接回答原问题', '表达后返回该朝向，不能擅自回正'):
             self.assertIn(text, tools['instructions'])
