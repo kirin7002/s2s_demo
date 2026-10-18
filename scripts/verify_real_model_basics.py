@@ -51,10 +51,40 @@ def prior_diagnostic(event, prior_commands):
     return bool(event.get('command_id') in prior_commands)
 
 
-def one_parameter_correction(errors):
+def one_parameter_correction(errors, *, execution_started=False):
     """One explicit preflight correction; never retry an accepted physical fault."""
-    return len(errors) == 1 and errors[0].get('error_code') == 'OUT_OF_RANGE' and (
-        errors[0].get('details', {}).get('reason') in {'speed', 'target', 'duration', 'frame_count', 'move_duration'})
+    if execution_started or len(errors) != 1 or errors[0].get('command_id'):
+        return False
+    error = errors[0]
+    details = error.get('details', {})
+    if error.get('error_code') == 'INVALID_ARGUMENT':
+        return bool(details.get('field')) and details.get('reason') in {
+            'type', 'required', 'additionalProperties', 'anyOf', 'oneOf', 'enum', 'const',
+            'minimum', 'maximum', 'minItems', 'maxItems', 'minProperties',
+            'minLength', 'maxLength', 'steps_json_encoding'}
+    return error.get('error_code') == 'OUT_OF_RANGE' and details.get('reason') in {
+        'speed', 'target', 'duration', 'frame_count', 'move_duration', 'step_count',
+        'generated_duration', 'generated_frame_count', 'generated_move_duration'}
+
+
+def correction_evidence(audits, diagnostics):
+    """Budget one model-authored correction, keeping the original rejection.
+
+    Audit and browser diagnostics describe the same call; do not count both.
+    Diagnostics can arrive first, but cannot conceal a physical failure.
+    """
+    errors = [e for e in audits if e.get('error_code') or
+              (e.get('stage') == 'device_command_status' and e.get('status') in ('failed', 'rejected'))]
+    evidence = errors or diagnostics
+    if not evidence:
+        return {'errors': [], 'allowed': False, 'attempts': 0, 'rejection': None}
+    first = next((i for i, e in enumerate(audits) if e is evidence[0]), len(audits))
+    execution_started = any(e.get('command_id') for e in audits[:first])
+    attempts = sum(e.get('stage') == 'perform_result' for e in audits[first + 1:]) if errors else 0
+    allowed = (one_parameter_correction(evidence, execution_started=execution_started)
+               and (not diagnostics or one_parameter_correction(diagnostics)) and attempts <= 1)
+    rejection = evidence[0] if one_parameter_correction([evidence[0]], execution_started=execution_started) else None
+    return {'errors': evidence, 'allowed': allowed, 'attempts': attempts, 'rejection': rejection}
 
 
 async def run_isolated(args, cases):
@@ -225,6 +255,7 @@ async def run(args):
                 result = {'id': case['id'], 'expected': case['expected'], 'audio_input_seconds': len(pcm) / 32000,
                           'audio_output_bytes': 0, 'responses': [], 'input_transcripts': [],
                           'diagnostics': [], 'late_prior_diagnostics': [],
+                          'parameter_correction_limit': 1, 'parameter_correction_attempts': 0,
                           'tool_call_start': len(before['latest_tool_call_names']), 'passed': False}
                 result['initial_pose'] = {key: initial_pose.get(key) for key in ('yaw_deg', 'pitch_deg')}
                 report['cases'].append(result)
@@ -273,14 +304,17 @@ async def run(args):
                                 else:
                                     raise RuntimeError('Voice connection ended')
                             audits = events_since(audit_path, offset)
-                            errors = [e for e in audits if e.get('error_code') or
-                                      (e.get('stage') == 'device_command_status' and e.get('status') in ('failed', 'rejected'))]
-                            if errors and one_parameter_correction(errors):
-                                result['parameter_corrections'] = errors
-                            elif errors or result['diagnostics']:
-                                result['failure_evidence'] = errors or result['diagnostics']
+                            correction = correction_evidence(audits, result['diagnostics'])
+                            if correction['allowed']:
+                                result['parameter_rejections'] = [correction['rejection']]
+                                result['parameter_correction_attempts'] = correction['attempts']
+                            elif correction['errors']:
+                                result['failure_evidence'] = correction['errors']
+                                result['parameter_correction_attempts'] = correction['attempts']
                                 raise ToolFailure('Tool failure; no automatic retry')
                             if pump.done() and last_done and time.monotonic() - last_message >= 1:
+                                if correction['allowed'] and not correction['attempts'] and not result['responses']:
+                                    continue  # Observe the bounded model continuation, not just the rejected tool turn.
                                 now = await rpc('status')
                                 if now['nonterminal_commands'] == 0 and now['latest_tool_output_count'] == len(now['latest_tool_call_names']):
                                     break
@@ -315,8 +349,18 @@ async def run(args):
                                        **{key: e[key] for key in ('timing_mode', 'timing_adjusted',
                                            'requested_duration_ms', 'effective_duration_ms', 'frame_timing',
                                            'source_tool', 'planning_mode', 'pace', 'planned_speed_deg_s', 'input_steps',
-                                           'generated_frames', 'return_to_neutral', 'neutral_frame_added', 'step_frames') if key in e},
+                                           'generated_frames', 'return_to_neutral', 'neutral_frame_added', 'step_frames',
+                                           'inherited_axes', 'input_normalized', 'normalizations', 'received_steps_type',
+                                           'normalized_steps_type') if key in e},
                                        'terminal': terminals.get(e['command_id'])} for e in performed]
+                correction = correction_evidence(audits, result['diagnostics'])
+                if correction['rejection']:
+                    result['parameter_rejections'] = [correction['rejection']]
+                    result['parameter_correction_attempts'] = correction['attempts']
+                    result['parameter_correction_outcome'] = (
+                        'completed' if correction['allowed'] and performed and all(
+                            terminals.get(e['command_id'], {}).get('status') == 'completed' for e in performed)
+                        else 'not_attempted' if not correction['attempts'] else 'failed_or_unconfirmed')
                 heads = [f for e in performed for f in e['summary'].get('head_frames', [])]
                 if heads:
                     result['return_target'] = {key: heads[-1][key] for key in ('yaw_deg', 'pitch_deg')}

@@ -100,6 +100,16 @@ class DeviceFixture:
 
 
 class ContractTests(unittest.TestCase):
+    def test_misplaced_diagnostics_only_expose_fixed_protocol_names(self):
+        secret = 'private-field-with-private-value'
+        arguments = {'steps': [{'screen': {'page': 'face', 'expression': 'laughing'}}],
+                     'hold_ms': secret, 'duration_ms': secret, secret: secret}
+        result = schema_error(list(PARAMETERS['stackchan_perform_targets'].iter_errors(arguments))).result()
+        self.assertEqual(result['details']['misplaced_fields'], ['duration_ms', 'hold_ms'])
+        self.assertEqual(result['details']['unknown_field_count'], 3)
+        self.assertNotIn(secret, json.dumps(result))
+        self.assertEqual(result['error_code'], 'INVALID_ARGUMENT')
+
     def test_target_summary_preserves_partial_axes_and_only_fixed_input_types(self):
         secret = 'synthetic-private-screen-text'
         summary = target_summary({'steps': [{'head': {'yaw_deg': 12},

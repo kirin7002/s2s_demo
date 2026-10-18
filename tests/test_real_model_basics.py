@@ -5,7 +5,8 @@ from pathlib import Path
 import tempfile
 from unittest.mock import patch
 
-from scripts.verify_real_model_basics import assess, one_parameter_correction, prior_diagnostic, run_isolated
+from scripts.verify_real_model_basics import (assess, correction_evidence, one_parameter_correction,
+                                             prior_diagnostic, run_isolated)
 
 
 class BasicAcceptanceTests(unittest.TestCase):
@@ -15,6 +16,34 @@ class BasicAcceptanceTests(unittest.TestCase):
         self.assertFalse(one_parameter_correction([speed, speed]))
         self.assertFalse(one_parameter_correction([{'error_code': 'MOTION_TIMEOUT'}]))
         self.assertFalse(one_parameter_correction([{'error_code': 'OUT_OF_RANGE'}]))
+        invalid = {'error_code': 'INVALID_ARGUMENT',
+                   'details': {'reason': 'additionalProperties', 'field': '$', 'misplaced_fields': ['hold_ms']}}
+        self.assertTrue(one_parameter_correction([invalid]))
+        self.assertFalse(one_parameter_correction([invalid], execution_started=True))
+        self.assertFalse(one_parameter_correction([{**invalid, 'command_id': 'already-dispatched'}]))
+        self.assertFalse(one_parameter_correction([{'error_code': 'ACK_TIMEOUT', 'command_id': 'unknown'}]))
+
+    def test_preflight_correction_retains_reject_and_counts_only_one_model_attempt(self):
+        reject = {'stage': 'perform_result', 'error_code': 'INVALID_ARGUMENT',
+                  'details': {'reason': 'additionalProperties', 'field': '$', 'misplaced_fields': ['hold_ms']}}
+        diagnostic = {k: v for k, v in reject.items() if k != 'stage'}
+        accepted = {'stage': 'perform_result', 'command_id': 'corrected', 'status': 'accepted'}
+        completed = {'stage': 'device_command_status', 'command_id': 'corrected', 'status': 'completed'}
+        for audits, diagnostics in (([], [diagnostic]), ([reject], [diagnostic]),
+                                    ([reject, accepted, completed], [diagnostic])):
+            result = correction_evidence(audits, diagnostics)
+            self.assertTrue(result['allowed'])
+            self.assertEqual(result['attempts'], int(accepted in audits))
+            self.assertEqual(result['rejection']['error_code'], 'INVALID_ARGUMENT')
+        self.assertFalse(correction_evidence([reject, reject], [diagnostic, diagnostic])['allowed'])
+        self.assertFalse(correction_evidence([accepted, reject], [diagnostic])['allowed'])
+        self.assertFalse(correction_evidence([reject, accepted, accepted], [diagnostic])['allowed'])
+        for code in ('MOTION_TIMEOUT', 'ACK_TIMEOUT', 'SCHEDULER_OVERRUN'):
+            fault = {'stage': 'device_command_status', 'command_id': 'corrected', 'error_code': code}
+            result = correction_evidence([reject, accepted, fault], [diagnostic])
+            self.assertFalse(result['allowed'])
+            self.assertEqual(result['attempts'], 1)
+            self.assertEqual(result['rejection'], reject)
     def test_forward_pose_tolerance_does_not_hide_absent_motion(self):
         checks = assess({'head_axis': 'pitch', 'returns_to_center': True}, [{'head_frames': [
             {'pitch_deg': .3, 'yaw_deg': -.3}, {'pitch_deg': .3, 'yaw_deg': -.3}]}],

@@ -107,7 +107,11 @@ def schema_details(error):
         details['missing_fields'] = [name for name in error.validator_value
                                      if name in known and name not in error.instance]
     elif error.validator == 'additionalProperties' and isinstance(error.instance, dict):
-        details['unknown_field_count'] = sum(k not in error.schema.get('properties', {}) for k in error.instance)
+        properties = error.schema.get('properties', {})
+        details['unknown_field_count'] = sum(k not in properties for k in error.instance)
+        misplaced = sorted(k for k in error.instance if k in known and k not in properties)
+        if misplaced:
+            details['misplaced_fields'] = misplaced
     elif error.validator in {'enum', 'const'}:
         details['allowed_values'] = error.validator_value
     elif error.validator in {'minLength', 'maxLength', 'minItems', 'maxItems'}:
