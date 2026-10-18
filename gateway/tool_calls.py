@@ -153,7 +153,8 @@ class ToolCalls:
                     if not self.valid(response):
                         call['state'] = 'cancelled'
                         return
-                    if self.diagnostic and (result.get('ok') is False or result.get('error_code')):
+                    if self.diagnostic and (result.get('ok') is False or result.get('error_code')
+                                            or result.get('timing_adjusted') is True):
                         await self.diagnostic(call['name'], result, call['call_id'])
                     await self.send({'type': 'conversation.item.create', 'item': {
                         'type': 'function_call_output', 'call_id': call['call_id'],

@@ -8,7 +8,7 @@ from aiohttp import ClientSession, WSServerHandshakeError
 
 from gateway.config import Config
 from gateway.server import DEVICES
-from gateway.stackchan import DeviceError, PARAMETERS, QWEN_TOOLS, encode, validate_frames
+from gateway.stackchan import DeviceError, PARAMETERS, QWEN_TOOLS, encode, schema_error, validate_frames
 from gateway.tool_calls import ToolCalls, ToolProtocolError
 from tests.test_gateway import Harness
 
@@ -37,6 +37,7 @@ class DeviceFixture:
         self.events = []
         self.commands = {}
         self.ack = True
+        self.capabilities = copy.deepcopy(CAPABILITIES)
         self.pose = {'yaw_deg': 0, 'pitch_deg': 0}
         self.query_enabled = True
         self.query_gate = None
@@ -47,7 +48,7 @@ class DeviceFixture:
     async def open(self):
         self.ws = await self.h.client.ws_connect('/device/v1/ws', headers={'Authorization': 'Bearer ' + TOKEN})
         await self.ws.send_json({'v': 1, 'type': 'device.hello', 'device_boot_id': 'fixture_boot',
-                                 'firmware_version': 'test-only', 'capabilities': CAPABILITIES})
+                                 'firmware_version': 'test-only', 'capabilities': self.capabilities})
         self.connection_id = (await self.ws.receive_json(timeout=2))['connection_id']
         self.reader = asyncio.create_task(self.run())
         return self
@@ -84,7 +85,7 @@ class DeviceFixture:
                 if not self.query_enabled:
                     continue
                 record = self.commands.get(message.get('command_id'), {})
-                await self.ws.send_json({**message, 'type': 'device.state', 'capabilities': CAPABILITIES,
+                await self.ws.send_json({**message, 'type': 'device.state', 'capabilities': self.capabilities,
                                          'state': self.pose,
                                          'status': 'unknown', **record,
                                          'request_id': message['request_id'], 'type': 'device.state'})
@@ -98,6 +99,29 @@ class DeviceFixture:
 
 
 class ContractTests(unittest.TestCase):
+    def test_schema_diagnostics_identify_fields_without_rejected_content(self):
+        secret = 'synthetic-private-screen-text'
+        cases = [({**SCENE, 'duration_ms': secret}, 'type', '$.duration_ms'),
+                 ({**SCENE, secret: secret}, 'additionalProperties', '$'),
+                 ({'duration_ms': 500, 'frames': [{'at_ms': 0, 'head': {
+                     'yaw_deg': 0, 'pitch_deg': 0}}]}, 'required', '$.frames[0].head')]
+        for args, reason, field in cases:
+            with self.subTest(reason=reason):
+                result = schema_error(list(PARAMETERS['stackchan_perform'].iter_errors(args))).result()
+                self.assertEqual(result['error_code'], 'INVALID_ARGUMENT')
+                self.assertEqual(result['details']['reason'], reason)
+                self.assertEqual(result['details']['field'], field)
+                self.assertNotIn(secret, json.dumps(result))
+
+    def test_cross_field_invalid_argument_identifies_frame_and_order(self):
+        scene = {'duration_ms': 1000, 'frames': [SCENE['frames'][0], SCENE['frames'][0]]}
+        with self.assertRaises(DeviceError) as raised:
+            validate_frames(scene, CAPABILITIES)
+        result = raised.exception.result()
+        self.assertEqual(result['details']['reason'], 'frame_order')
+        self.assertEqual(result['details']['frame_index'], 1)
+        self.assertEqual(result['details']['field'], 'at_ms')
+
     def test_speed_diagnostics_use_adjacent_targets_and_max_axis(self):
         caps = copy.deepcopy(CAPABILITIES)
         caps['head']['max_speed_deg_s'] = 30
@@ -161,13 +185,14 @@ class ContractTests(unittest.TestCase):
             if key != 'instructions':
                 self.assertEqual(base[key], tools[key])
         self.assertEqual(len(tools['tools']), 4)
+        self.assertEqual({tool['function']['name'] for tool in tools['tools']}, {
+            'stackchan_get_state', 'stackchan_perform_targets', 'stackchan_get_command', 'stackchan_stop'})
+        self.assertEqual(len(QWEN_TOOLS), 5)
         self.assertIn('模拟', tools['instructions'])
-        self.assertIn('move_ms默认1000–1500ms', tools['instructions'])
-        self.assertLess(tools['instructions'].index('【头部默认节奏】'), tools['instructions'].index('ceil('))
-        for text in ('ceil(distance/max_speed_deg_s*1000)', '1584ms', 'details.reason', '20个中文字符', '不可猜测锁定'):
+        for text in ('stackchan_perform_targets', 'return_to_neutral=true', '不计算速度', '20个中文字符', '不可猜成锁定'):
             self.assertIn(text, tools['instructions'])
-        perform = next(t for t in tools['tools'] if t['function']['name'] == 'stackchan_perform')
-        self.assertIn('1584', perform['function']['description'])
+        perform = next(t for t in QWEN_TOOLS if t['function']['name'] == 'stackchan_perform')
+        self.assertIn('timing_mode defaults to auto', perform['function']['description'])
         self.assertNotIn(TOKEN, repr(config) + json.dumps(tools))
 
 
@@ -195,9 +220,147 @@ class DeviceGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.hub.control)
         self.assertFalse(self.hub.records)
 
+    async def test_auto_compiles_reported_speed_and_duration_failures_before_wire(self):
+        object.__setattr__(self.h.cfg, 'stackchan_audit_enabled', True)
+        self.device.capabilities['head']['max_speed_deg_s'] = 30
+        args = {'duration_ms': 2500, 'frames': [
+            {'at_ms': 0, 'head': {'yaw_deg': 0, 'pitch_deg': 0, 'move_ms': 1000}},
+            {'at_ms': 1000, 'head': {'yaw_deg': 20, 'pitch_deg': 0, 'move_ms': 900}},
+            {'at_ms': 1900, 'head': {'yaw_deg': -20, 'pitch_deg': 0, 'move_ms': 900},
+             'screen': {'page': 'text', 'text': 'synthetic-private-screen-text'}}]}
+        saved = copy.deepcopy(args)
+        with self.assertLogs('gateway.stackchan', level='WARNING') as audit:
+            result = await self.control.execute('stackchan_perform', args)
+            command = next(e for e in self.device.events if e['type'] == 'command.execute')
+            await self.device.status(command, 'completed')
+            await until(lambda: self.hub.records[result['command_id']]['status'] == 'completed')
+        self.assertEqual(result['status'], 'accepted')
+        self.assertEqual(result['timing_mode'], 'auto')
+        self.assertTrue(result['timing_adjusted'])
+        self.assertEqual(result['effective_duration_ms'], 3501)
+        wire = command['args']
+        self.assertEqual(wire['frames'][2]['head']['move_ms'], 1584)
+        self.assertEqual([f['at_ms'] for f in wire['frames']], [0, 1000, 1917])
+        self.assertNotIn('timing_mode', wire)
+        self.assertEqual(args, saved)
+        record = self.hub.records[result['command_id']]
+        self.assertEqual(record['effective_args'], wire)
+        self.assertEqual(record['action_summary']['duration_ms'], 3501)
+        self.assertEqual(record['requested_summary']['duration_ms'], 2500)
+        self.assertIn('requested_summary', '\n'.join(audit.output))
+        self.assertIn('effective_summary', '\n'.join(audit.output))
+        self.assertNotIn('synthetic-private-screen-text', '\n'.join(audit.output))
+        query = await self.control.execute('stackchan_get_command', {'command_id': result['command_id']})
+        self.assertEqual(query['status'], 'completed')
+        self.assertEqual(query['frame_timing'], result['frame_timing'])
+
+    async def test_auto_repairs_frames_starting_beyond_original_duration(self):
+        args = {'duration_ms': 1500, 'frames': [
+            {'at_ms': 0, 'screen': {'page': 'face', 'expression': 'happy'}},
+            {'at_ms': 2000, 'screen': {'page': 'face', 'expression': 'neutral'}}]}
+        result = await self.control.execute('stackchan_perform', args)
+        self.assertEqual(result['status'], 'accepted')
+        self.assertTrue(result['timing_adjusted'])
+        self.assertEqual(result['effective_duration_ms'], 2001)
+        await self.control.execute('stackchan_stop', {})
+        strict = await self.control.execute('stackchan_perform', {**args, 'timing_mode': 'strict'})
+        self.assertEqual(strict['error_code'], 'INVALID_ARGUMENT')
+        self.assertEqual(strict['details']['reason'], 'frame_outside_duration')
+        self.assertEqual(strict['details']['frame_index'], 1)
+
+    async def test_auto_resource_failure_is_atomic_and_does_not_clip_targets(self):
+        self.device.capabilities['head']['max_speed_deg_s'] = 30
+        args = {'duration_ms': 8000, 'frames': [{'at_ms': 0,
+                 'head': {'yaw_deg': 20, 'pitch_deg': 0, 'move_ms': 100}}]}
+        saved = copy.deepcopy(args)
+        result = await self.control.execute('stackchan_perform', args)
+        self.assertEqual(result['error_code'], 'OUT_OF_RANGE')
+        self.assertEqual(result['details']['reason'], 'planned_duration')
+        self.assertEqual(args, saved)
+        self.assertFalse(self.hub.records)
+        self.assertFalse(any(e['type'] == 'command.execute' for e in self.device.events))
+
+    async def test_auto_uses_fresh_start_and_preserves_same_frame_outputs(self):
+        self.device.capabilities['head']['max_speed_deg_s'] = 30
+        self.device.pose = {'yaw_deg': -20, 'pitch_deg': 0}
+        args = {'duration_ms': 500, 'frames': [{'at_ms': 0,
+            'head': {'yaw_deg': 20, 'pitch_deg': 0, 'move_ms': 500},
+            'screen': {'page': 'face', 'expression': 'happy'},
+            'light': {'rgb': [0, 255, 0], 'brightness': .2, 'fade_ms': 100}}]}
+        result = await self.control.execute('stackchan_perform', args)
+        self.assertEqual(result['effective_duration_ms'], 1584)
+        command = next(e for e in self.device.events if e['type'] == 'command.execute')
+        frame = command['args']['frames'][0]
+        self.assertEqual(frame['at_ms'], 0)
+        self.assertEqual(frame['screen'], args['frames'][0]['screen'])
+        self.assertEqual(frame['light'], args['frames'][0]['light'])
+
+    async def test_free_targets_share_wire_path_and_append_exact_neutral(self):
+        self.device.capabilities['head']['max_speed_deg_s'] = 30
+        self.device.pose = {'yaw_deg': -.3, 'pitch_deg': -2.2}
+        args = {'steps': [
+            {'head': {'yaw_deg': -17, 'pitch_deg': 3}, 'hold_ms': 500,
+             'screen': {'page': 'face', 'expression': 'happy'},
+             'light': {'rgb': [0, 255, 0], 'brightness': .2}},
+            {'head': {'yaw_deg': 12, 'pitch_deg': 9}}], 'return_to_neutral': True}
+        saved = copy.deepcopy(args)
+        result = await self.control.execute('stackchan_perform_targets', args)
+        self.assertEqual(result['status'], 'accepted')
+        self.assertEqual(result['source_tool'], 'stackchan_perform_targets')
+        self.assertEqual(result['planning_mode'], 'targets')
+        self.assertTrue(result['neutral_frame_added'])
+        command = next(e for e in self.device.events if e['type'] == 'command.execute')
+        first, second, last = command['args']['frames']
+        self.assertEqual(second['at_ms'] - first['head']['move_ms'], 500)
+        self.assertEqual(first['screen'], args['steps'][0]['screen'])
+        self.assertEqual(first['light']['rgb'], [0, 255, 0])
+        self.assertEqual((last['head']['yaw_deg'], last['head']['pitch_deg']), (0, 0))
+        self.assertNotIn('steps', command['args'])
+        self.assertEqual(args, saved)
+        record = self.hub.records[result['command_id']]
+        self.assertEqual(record['effective_args'], command['args'])
+        self.assertNotIn('at_ms', record['requested_summary']['steps'][0])
+        self.assertEqual(record['action_summary']['head_frames'][-1]['yaw_deg'], 0)
+
+    async def test_free_targets_long_leg_inserts_collinear_frames_in_one_command(self):
+        self.device.capabilities['head']['max_speed_deg_s'] = 30
+        self.device.pose = {'yaw_deg': -60, 'pitch_deg': -20}
+        result = await self.control.execute('stackchan_perform_targets', {
+            'pace': 'brisk', 'steps': [{'head': {'yaw_deg': 60, 'pitch_deg': 20}}]})
+        self.assertEqual(result['status'], 'accepted')
+        self.assertEqual(result['generated_frames'], 2)
+        commands = [e for e in self.device.events if e['type'] == 'command.execute']
+        self.assertEqual(len(commands), 1)
+        first, last = commands[0]['args']['frames']
+        self.assertEqual((first['head']['yaw_deg'], first['head']['pitch_deg']), (0, 0))
+        self.assertEqual((last['head']['yaw_deg'], last['head']['pitch_deg']), (60, 20))
+        self.assertEqual(result['effective_duration_ms'], 4500)
+
+    async def test_free_targets_hold_over_two_seconds_and_atomic_budget_rejection(self):
+        args = {'steps': [{'screen': {'page': 'face', 'expression': 'happy'}, 'hold_ms': 3000}]}
+        result = await self.control.execute('stackchan_perform_targets', args)
+        self.assertEqual(result['status'], 'accepted')
+        self.assertEqual(result['effective_duration_ms'], 3250)
+        await self.control.execute('stackchan_stop', {})
+        too_long = {'steps': [{**args['steps'][0], 'hold_ms': 8000}]}
+        result = await self.control.execute('stackchan_perform_targets', too_long)
+        self.assertEqual(result['error_code'], 'OUT_OF_RANGE')
+        self.assertEqual(result['details']['reason'], 'generated_duration')
+        self.assertEqual(sum(e['type'] == 'command.execute' for e in self.device.events), 1)
+
+    async def test_free_targets_still_reject_unknown_fields_without_echo(self):
+        secret = 'synthetic-private-screen-text'
+        result = await self.control.execute('stackchan_perform_targets', {'steps': [{
+            'head': {'yaw_deg': 0, 'pitch_deg': 1, secret: secret}}]})
+        self.assertEqual(result['error_code'], 'INVALID_ARGUMENT')
+        self.assertEqual(result['details']['field'], '$.steps[0].head')
+        self.assertEqual(result['details']['step_index'], 0)
+        self.assertNotIn(secret, json.dumps(result))
+        self.assertFalse(any(e['type'] == 'command.execute' for e in self.device.events))
+
     async def test_first_head_frame_uses_new_query_not_cached_pose(self):
         self.device.pose = {'yaw_deg': -50, 'pitch_deg': 0}
-        scene = {'duration_ms': 1000, 'frames': [{'at_ms': 0,
+        scene = {'timing_mode': 'strict', 'duration_ms': 1000, 'frames': [{'at_ms': 0,
                  'head': {'yaw_deg': 50, 'pitch_deg': 0, 'move_ms': 200}}]}
         result = await self.control.execute('stackchan_perform', scene)
         self.assertEqual(result['details']['reason'], 'speed')
@@ -229,6 +392,9 @@ class DeviceGatewayTests(unittest.IsolatedAsyncioTestCase):
         retry = await self.control.execute('stackchan_perform', scene)
         self.assertEqual(retry['error_code'], 'NOT_READY')
         self.assertEqual(retry['details']['reason'], 'head_motion_fault_latched')
+        target_retry = await self.control.execute('stackchan_perform_targets', {
+            'steps': [{'head': {'yaw_deg': 1, 'pitch_deg': 0}}]})
+        self.assertEqual(target_retry['details']['reason'], 'head_motion_fault_latched')
         self.assertEqual(sum(e['type'] == 'command.execute' for e in self.device.events), 1)
         state = await self.control.execute('stackchan_get_state', {})
         self.assertEqual(state['head_motion_fault'], 'SCHEDULER_OVERRUN')
@@ -253,7 +419,7 @@ class DeviceGatewayTests(unittest.IsolatedAsyncioTestCase):
                  ({**SCENE, 'frames': SCENE['frames'] * 17}, 'frame_count', None),
                  ({'duration_ms': 1000, 'frames': [{'at_ms': 0, 'head': {
                      'yaw_deg': 61, 'pitch_deg': 0, 'move_ms': 500}}]}, 'target', 0),
-                 ({'duration_ms': 200, 'frames': [{'at_ms': 0, 'head': {
+                 ({'timing_mode': 'strict', 'duration_ms': 200, 'frames': [{'at_ms': 0, 'head': {
                      'yaw_deg': 1, 'pitch_deg': 0, 'move_ms': 500}}]}, 'duration', 0)]
         for args, reason, frame in cases:
             result = await self.control.execute('stackchan_perform', args)
@@ -402,7 +568,7 @@ class DeviceGatewayTests(unittest.IsolatedAsyncioTestCase):
         # Find a schema-valid body that fits alone but exceeds with routing IDs.
         arguments = None
         for length in range(1, 81):
-            candidate = {'duration_ms': 8000, 'frames': [
+            candidate = {'timing_mode': 'strict', 'duration_ms': 8000, 'frames': [
                 {'at_ms': i * 500, 'head': {'yaw_deg': .123456789012345, 'pitch_deg': .123456789012345, 'move_ms': 100},
                  'light': {'rgb': [0, 0, 0], 'brightness': .123456789012345, 'fade_ms': 0},
                  'screen': {'page': 'text', 'text': '😀' * length}} for i in range(16)]}
@@ -430,7 +596,8 @@ class DeviceGatewayTests(unittest.IsolatedAsyncioTestCase):
         voice = await self.h.socket()
         self.assertEqual((await voice.receive_json(timeout=2))['type'], 'ready')
         session = (await self.h.events.get())['session']
-        self.assertEqual(session['tools'], QWEN_TOOLS)
+        self.assertEqual({t['function']['name'] for t in session['tools']}, {
+            'stackchan_get_state', 'stackchan_perform_targets', 'stackchan_get_command', 'stackchan_stop'})
         await voice.close()
         await self.h.client.post('/api/stackchan/bind', json={'device_id': None},
                                  headers={'Origin': self.h.cfg.origin})

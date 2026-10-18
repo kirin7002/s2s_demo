@@ -141,6 +141,8 @@ async function start() {
           case 'transcript': transcript(message.role, message.text); break;
           case 'tool_diagnostic':
             transcript('diagnostic', `${message.tool}：${message.error_code || '执行未确认'}${message.details ? ' ' + JSON.stringify(message.details) : ''}`); break;
+          case 'tool_timing':
+            transcript('diagnostic', `动作时序已调整：${message.requested_duration_ms} → ${message.effective_duration_ms} 毫秒；完成情况以设备回执为准。`); break;
           case 'notice': el('detail').textContent = message.message; break;
           case 'error': finish(s, '会话错误', message.message); break;
         }

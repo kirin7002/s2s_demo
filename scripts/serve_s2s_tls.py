@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from aiohttp import WSMsgType, web
 from gateway.config import Config
-from gateway.action_audit import action_summary
+from gateway.action_audit import action_summary, target_summary
 from gateway.server import ACTIVE, ATTEMPTS, CLIENT, DEVICES, LOGINS, OWNERS, create_app
 from scripts.stackchan_hardware import private_json, private_write
 
@@ -73,7 +73,8 @@ class TrackedProvider:
                 name = event.get('name')
                 args = event.get('arguments', '')
                 self.calls.append({'name': name if name in {
-                    'stackchan_get_state', 'stackchan_perform', 'stackchan_get_command', 'stackchan_stop'} else 'unknown',
+                    'stackchan_get_state', 'stackchan_perform', 'stackchan_perform_targets',
+                    'stackchan_get_command', 'stackchan_stop'} else 'unknown',
                     'call_id': event.get('call_id'),
                     'arguments_sha256': hashlib.sha256(args.encode()).hexdigest()})
                 if name == 'stackchan_perform':
@@ -81,6 +82,11 @@ class TrackedProvider:
                         self.calls[-1]['action_summary'] = action_summary(json.loads(args))
                     except (ValueError, TypeError):
                         self.calls[-1]['action_summary'] = {'valid': False}
+                elif name == 'stackchan_perform_targets':
+                    try:
+                        self.calls[-1]['requested_summary'] = target_summary(json.loads(args))
+                    except (ValueError, TypeError):
+                        self.calls[-1]['requested_summary'] = {'valid': False}
             elif kind == 'response.audio.delta':
                 # Count encoded length only; audio and transcripts are not logged.
                 self.audio_bytes += len(event.get('delta', '')) * 3 // 4
@@ -96,7 +102,10 @@ class TrackedProvider:
             item = event['item']
             value = json.loads(item['output'])
             self.outputs.append({'call_id': item['call_id'], **{key: value[key] for key in (
-                'ok', 'status', 'command_id', 'error_code', 'details', 'online', 'fresh', 'age_ms', 'simulated', 'state'
+                'ok', 'status', 'command_id', 'error_code', 'details', 'online', 'fresh', 'age_ms', 'simulated', 'state',
+                'timing_mode', 'timing_adjusted', 'requested_duration_ms', 'effective_duration_ms', 'frame_timing',
+                'source_tool', 'planning_mode', 'pace', 'planned_speed_deg_s', 'input_steps', 'generated_frames',
+                'return_to_neutral', 'neutral_frame_added', 'step_frames'
             ) if key in value}})
         await self.socket.send_json(event)
 

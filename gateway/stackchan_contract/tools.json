@@ -1,5 +1,5 @@
 {
-  "contract_version": "0.1.0",
+  "contract_version": "0.3.0",
   "status": "design",
   "tools": [
     {
@@ -13,8 +13,185 @@
       }
     },
     {
+      "name": "stackchan_perform_targets",
+      "description": "Execute freely chosen target keyframes. Prefer this for normal robot interaction instead of calculating frame timestamps. Choose arbitrary absolute head poses, expressions, lights and their order; there are no fixed nod/shake templates. The gateway derives timing and intermediate waypoints from the fresh measured pose and device capabilities; the firmware interpolates the movement. All channels within a step begin together. hold_ms means a pause after settling. For a nod choose different pitch targets; for a shake choose left and right yaw targets. Set return_to_neutral=true when the user asks to finish facing forward; code targets calibrated yaw=0,pitch=0 rather than copying a measured offset. Mechanical limits and total command bounds remain enforced; infeasible plans are atomically rejected, never clipped. Returns the effective plan and accepted acknowledgement; use stackchan_get_command to confirm completion.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "steps": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 16,
+            "items": {
+              "type": "object",
+              "properties": {
+                "head": {
+                  "type": "object",
+                  "properties": {
+                    "yaw_deg": {
+                      "type": "number",
+                      "minimum": -60,
+                      "maximum": 60,
+                      "description": "Absolute target yaw in calibrated coordinates. A shake needs distinct left and right yaw targets, then return to 0; do not copy the measured current pose into every frame."
+                    },
+                    "pitch_deg": {
+                      "type": "number",
+                      "minimum": -25,
+                      "maximum": 25,
+                      "description": "Absolute target pitch in calibrated coordinates. A nod needs a visibly changed pitch target and a return to 0. Current measured pose is the starting point for timing, not all future targets."
+                    }
+                  },
+                  "required": [
+                    "yaw_deg",
+                    "pitch_deg"
+                  ],
+                  "additionalProperties": false,
+                  "description": "Free absolute target pose, not a gesture preset. The gateway computes travel time and the device interpolates intermediate positions."
+                },
+                "screen": {
+                  "type": "object",
+                  "properties": {
+                    "page": {
+                      "type": "string",
+                      "enum": [
+                        "face",
+                        "text"
+                      ]
+                    },
+                    "expression": {
+                      "type": "string",
+                      "enum": [
+                        "neutral",
+                        "happy",
+                        "laughing",
+                        "scared",
+                        "sad",
+                        "surprised",
+                        "thinking"
+                      ]
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    }
+                  },
+                  "required": [
+                    "page"
+                  ],
+                  "additionalProperties": false,
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "page": {
+                          "const": "face"
+                        }
+                      },
+                      "required": [
+                        "expression"
+                      ],
+                      "not": {
+                        "required": [
+                          "text"
+                        ]
+                      }
+                    },
+                    {
+                      "properties": {
+                        "page": {
+                          "const": "text"
+                        }
+                      },
+                      "required": [
+                        "text"
+                      ],
+                      "not": {
+                        "required": [
+                          "expression"
+                        ]
+                      }
+                    }
+                  ],
+                  "description": "Use only expressions/pages advertised by the device. Text is plain Unicode, at most 80 code points, with no markup or network asset URLs."
+                },
+                "light": {
+                  "type": "object",
+                  "properties": {
+                    "rgb": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 255
+                      },
+                      "minItems": 3,
+                      "maxItems": 3
+                    },
+                    "brightness": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
+                  },
+                  "required": [
+                    "rgb",
+                    "brightness"
+                  ],
+                  "additionalProperties": false,
+                  "description": "Set all body RGB LEDs together. Brightness is multiplied by the locally enforced device brightness ceiling."
+                },
+                "hold_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 8000,
+                  "description": "Optional dwell after this target step settles, e.g. 500 for half a second."
+                }
+              },
+              "additionalProperties": false,
+              "anyOf": [
+                {
+                  "required": [
+                    "head"
+                  ]
+                },
+                {
+                  "required": [
+                    "screen"
+                  ]
+                },
+                {
+                  "required": [
+                    "light"
+                  ]
+                }
+              ]
+            }
+          },
+          "pace": {
+            "type": "string",
+            "enum": [
+              "gentle",
+              "normal",
+              "brisk"
+            ],
+            "default": "normal",
+            "description": "Preferred pace; code calculates motion time within the device maximum speed."
+          },
+          "return_to_neutral": {
+            "type": "boolean",
+            "default": false,
+            "description": "Append a computed calibrated zero-pose target after the requested steps when needed."
+          }
+        },
+        "required": [
+          "steps"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "stackchan_perform",
-      "description": "Execute a bounded sequence of head poses, light settings and screen frames chosen by the agent. Returns accepted only after device acknowledgement; accepted does not mean completed. Query stackchan_get_command for completion. Device selection and authorization are supplied by the gateway session. Before planning head motion, read fresh state and capabilities. For each head frame, compute distance=max(abs(target_yaw-previous_yaw),abs(target_pitch-previous_pitch)); the first frame starts at the measured pose, later frames at the previous head target. move_ms must be at least ceil(1000*distance/head.max_speed_deg_s); allow an additional 250 ms settling margin rather than using the speed boundary. For example, -20 to +20 degrees at 30 deg/s needs at least 1334 ms, preferably 1584 ms or longer, not 500 ms. Recompute subsequent at_ms and duration_ms when changing move_ms. Keep all timing and frame limits; reduce repetitions or amplitude if needed. OUT_OF_RANGE can mean excessive speed as well as position or sequence limits; inspect error details, never infer locking or calibration faults. Do not blindly retry rejected or timed-out motion.",
+      "description": "Execute head targets, lights and screen frames chosen by the agent. timing_mode defaults to auto: the gateway deterministically lengthens insufficient head movement budgets using fresh pose, advertised speed and 250ms settling time, shifts later frames forward, and recomputes total duration. It never changes targets, colors or expressions; same-frame channels remain simultaneous and explicit nonnegative channel pauses are not shortened. The acknowledgement reports the effective timing. Select strict when the user requires exact timing; then invalid speed or timeline is rejected unchanged. Both modes keep device range, 16-frame, 4000ms movement and 8000ms total limits; plans that cannot fit are rejected without clipping or splitting. Choose distinct pitch targets for nods or left/right yaw targets for shakes, and explicitly target yaw=0,pitch=0 when returning to calibrated neutral; do not mistake a measured offset for neutral. accepted means acknowledged, not completed; use stackchan_get_command to confirm the physical result. Device selection and authorization come from the gateway session.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -52,7 +229,7 @@
                       "type": "integer",
                       "minimum": 100,
                       "maximum": 4000,
-                      "description": "Movement budget INCLUDING physical settling, not the pause before a frame. Unless the user requests a particular pace, use 1000-1500 ms for each small nod/shake movement. Do not default to the schema minimum 100 ms. For nonzero travel allow at least ceil(1000*max(abs(delta_yaw),abs(delta_pitch))/advertised_max_speed_deg_s)+250 ms. Recompute later at_ms and duration_ms when changing this budget."
+                      "description": "Requested movement budget. In auto mode the gateway extends it as needed for fresh starting pose, advertised speed and settling, then shifts later frames. Use 1000-1500 ms as a natural small-gesture pace. strict mode requires physically feasible exact timing."
                     }
                   },
                   "required": [
@@ -186,6 +363,15 @@
             },
             "minItems": 1,
             "maxItems": 16
+          },
+          "timing_mode": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "strict"
+            ],
+            "default": "auto",
+            "description": "auto (default) lets the gateway compile feasible timing without changing action targets. strict preserves timing exactly and rejects impossible plans."
           }
         },
         "required": [

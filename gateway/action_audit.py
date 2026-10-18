@@ -4,6 +4,37 @@ import math
 EXPRESSIONS = {'neutral', 'happy', 'laughing', 'scared', 'sad', 'surprised', 'thinking'}
 
 
+def target_summary(arguments):
+    """Requested free targets, with no invented clocks and no screen text."""
+    arguments = arguments if isinstance(arguments, dict) else {}
+    steps = arguments.get('steps', [])
+    steps = steps if isinstance(steps, list) else []
+    safe = []
+    def finite(value):
+        return type(value) in (int, float) and -1000000 <= value <= 1000000 and math.isfinite(value)
+    for index, step in enumerate(steps[:16]):
+        if not isinstance(step, dict):
+            continue
+        item = {'step_index': index}
+        head, screen, light = step.get('head'), step.get('screen'), step.get('light')
+        if isinstance(head, dict) and all(finite(head.get(k)) for k in ('yaw_deg', 'pitch_deg')):
+            item['head'] = {k: head[k] for k in ('yaw_deg', 'pitch_deg')}
+        if isinstance(screen, dict) and screen.get('page') in ('face', 'text'):
+            item['screen'] = {'page': screen['page']}
+            if isinstance(screen.get('expression'), str) and screen['expression'] in EXPRESSIONS:
+                item['screen']['expression'] = screen['expression']
+        if (isinstance(light, dict) and isinstance(light.get('rgb'), list) and len(light['rgb']) == 3
+                and all(finite(v) for v in light['rgb']) and finite(light.get('brightness'))):
+            item['light'] = {'rgb': list(light['rgb']), 'brightness': light['brightness']}
+        if finite(step.get('hold_ms')):
+            item['hold_ms'] = step['hold_ms']
+        safe.append(item)
+    return {'step_count': len(steps), 'steps': safe,
+            **({'pace': arguments['pace']} if arguments.get('pace') in ('gentle', 'normal', 'brisk') else {}),
+            **({'return_to_neutral': arguments['return_to_neutral']}
+               if type(arguments.get('return_to_neutral')) is bool else {})}
+
+
 def action_summary(arguments):
     frames = arguments.get('frames', []) if isinstance(arguments, dict) else []
     frames = frames if isinstance(frames, list) else []

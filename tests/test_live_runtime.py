@@ -66,6 +66,16 @@ class LiveRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(socket.closed)
         self.assertEqual(len(socket.sent), 1)
 
+    async def test_compiled_timing_is_retained_in_provider_result_audit(self):
+        tracked = TrackedProvider(Socket(), self.runtime)
+        timing = {'timing_mode': 'auto', 'timing_adjusted': True, 'requested_duration_ms': 1000,
+                  'effective_duration_ms': 1584, 'frame_timing': [{'frame_index': 0, 'at_ms': 0, 'move_ms': 1584}]}
+        await tracked.send_json({'type': 'conversation.item.create', 'item': {
+            'type': 'function_call_output', 'call_id': 'fixture',
+            'output': json.dumps({'ok': True, 'status': 'accepted', **timing})}})
+        for key, value in timing.items():
+            self.assertEqual(tracked.outputs[0][key], value)
+
     async def test_temporary_eight_call_budget_removed(self):
         socket = Socket({'type': 'response.function_call_arguments.done', 'name': 'stackchan_get_state',
                          'call_id': 'fixture', 'arguments': '{}'})

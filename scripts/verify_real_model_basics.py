@@ -311,6 +311,11 @@ async def run(args):
                 terminals = {e['command_id']: e for e in audits if e.get('stage') == 'device_command_status'
                              and e.get('status') in ('completed', 'failed', 'cancelled', 'rejected')}
                 result['commands'] = [{'command_id': e['command_id'], 'summary': e['summary'],
+                                       'requested_summary': e.get('requested_summary'),
+                                       **{key: e[key] for key in ('timing_mode', 'timing_adjusted',
+                                           'requested_duration_ms', 'effective_duration_ms', 'frame_timing',
+                                           'source_tool', 'planning_mode', 'pace', 'planned_speed_deg_s', 'input_steps',
+                                           'generated_frames', 'return_to_neutral', 'neutral_frame_added', 'step_frames') if key in e},
                                        'terminal': terminals.get(e['command_id'])} for e in performed]
                 heads = [f for e in performed for f in e['summary'].get('head_frames', [])]
                 if heads:
@@ -329,6 +334,11 @@ async def run(args):
                     terminals.get(e['command_id'], {}).get('status') == 'completed'
                     and terminals[e['command_id']].get('simulated') is False for e in performed)
                 result['checks']['fresh_real_state'] = fresh.get('fresh') is True and fresh.get('simulated') is False
+                if args.require_targets:
+                    result['checks']['model_selected_free_targets'] = bool(performed) and all(
+                        e.get('source_tool') == 'stackchan_perform_targets' for e in performed)
+                    result['checks']['explicit_software_zero_target'] = not case['expected'].get('returns_to_center') or bool(
+                        heads and all(heads[-1][key] == 0 for key in ('yaw_deg', 'pitch_deg')))
                 result['checks']['short_spoken_reply'] = bool(result['responses']) and all(
                     r['characters'] <= 20 for r in result['responses'])
                 result['audio_output_seconds'] = result['audio_output_bytes'] / 48000
@@ -371,6 +381,7 @@ def main():
     parser.add_argument('--directory', type=Path, default=ROOT / '.run/s2s-live')
     parser.add_argument('--cases', type=Path, default=ROOT / 'tests/fixtures/real-model-basic-cases.json')
     parser.add_argument('--case-ids', nargs='+', help='Explicitly authorized subset; preserves canonical order')
+    parser.add_argument('--require-targets', action='store_true', help='Verify real model selected free-target tool')
     parser.add_argument('--audio-directory', type=Path, help='Reuse verified PCM16 mono 16k synthetic WAVs')
     parser.add_argument('--report-name', default='real-model-basic-results.json')
     args = parser.parse_args()

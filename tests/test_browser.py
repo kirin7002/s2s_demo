@@ -242,6 +242,10 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             details:{reason:'speed', frame_index:1, minimum_move_ms:1334}
         })})""")
         self.assertIn('1334', await self.page.locator('#transcripts').inner_text())
+        await self.page.evaluate("""() => window.__sockets[0].onmessage({data: JSON.stringify({
+            type:'tool_timing', requested_duration_ms:2500, effective_duration_ms:3501
+        })})""")
+        self.assertIn('2500 → 3501', await self.page.locator('#transcripts').inner_text())
         self.assertEqual(await self.page.evaluate('window.__sources.length'), 0)
         self.assertTrue(await self.page.locator('#start').is_disabled())
         await self.page.click('#stop')

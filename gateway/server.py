@@ -137,6 +137,10 @@ class Session:
 
     async def tool_diagnostic(self, name, result, call_id):
         # A browser-only event: never appended as speech or sent to TTS.
+        if not result.get('error_code') and result.get('timing_adjusted') is True:
+            await self.emit('tool_timing', tool=name, call_id=call_id, **{key: result[key] for key in
+                            ('command_id', 'requested_duration_ms', 'effective_duration_ms', 'status') if key in result})
+            return
         await self.emit('tool_diagnostic', tool=name, call_id=call_id, **{key: result[key] for key in
                         ('error_code', 'details', 'command_id', 'status') if key in result})
 
