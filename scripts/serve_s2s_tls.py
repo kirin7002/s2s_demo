@@ -106,7 +106,8 @@ class TrackedProvider:
                 'timing_mode', 'timing_adjusted', 'requested_duration_ms', 'effective_duration_ms', 'frame_timing',
                 'source_tool', 'planning_mode', 'pace', 'planned_speed_deg_s', 'input_steps', 'generated_frames',
                 'return_to_neutral', 'neutral_frame_added', 'step_frames', 'inherited_axes',
-                'input_normalized', 'normalizations', 'received_steps_type', 'normalized_steps_type'
+                'input_normalized', 'normalizations', 'received_steps_type', 'normalized_steps_type',
+                'retryable', 'validation_failures', 'corrections_remaining', 'action_dispatched'
             ) if key in value}})
         await self.socket.send_json(event)
 

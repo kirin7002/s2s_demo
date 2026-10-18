@@ -218,6 +218,8 @@ class ContractTests(unittest.TestCase):
         self.assertIn('模拟', tools['instructions'])
         for text in ('stackchan_perform_targets', 'return_to_neutral=true', '不计算速度', '20个中文字符', '不可猜成锁定'):
             self.assertIn(text, tools['instructions'])
+        for text in ('steps直接使用JSON数组', 'retryable=true', 'retryable=false时结束本轮动作'):
+            self.assertIn(text, tools['instructions'])
         for text in ('定向看/转向默认保持最终目标', '明确设置return_to_neutral=false',
                      'hold_ms结束不意味着恢复', '允许自由选择上下文恰当的头部姿态配合表情与灯光',
                      '微笑用happy，大笑用laughing', '明确展示表情时留足观察时间', '不要每次主动追加neutral'):
@@ -767,6 +769,68 @@ class DeviceGatewayTests(unittest.IsolatedAsyncioTestCase):
         await voice.close()
         await until(lambda: self.hub.control is None)
 
+    async def test_rejection_budget_keeps_voice_open_and_resets_on_new_speech(self):
+        voice = await self.h.socket()
+        await voice.receive_json(timeout=2)
+        await self.h.events.get()
+        provider = self.h.upstreams[-1]
+        secret = 'synthetic-private-screen-text'
+
+        async def response(identifier, arguments):
+            item = {'type': 'function_call', 'call_id': identifier + '_call',
+                    'name': 'stackchan_perform_targets', 'arguments': json.dumps(arguments)}
+            await provider.send_json({'type': 'response.created', 'response': {'id': identifier}})
+            await provider.send_json({'type': 'response.output_item.added', 'response_id': identifier,
+                                      'output_index': 0, 'item': item})
+            await provider.send_json({'type': 'response.function_call_arguments.done', 'response_id': identifier,
+                                      'output_index': 0, **{k: item[k] for k in ('call_id', 'name', 'arguments')}})
+            await provider.send_json({'type': 'response.done', 'response': {
+                'id': identifier, 'status': 'completed', 'output': [item]}})
+
+        async def browser_event(kind):
+            while True:
+                message = await voice.receive_json(timeout=2)
+                if message['type'] == kind:
+                    return message
+
+        invalid = {'steps': "[{'screen':{'page':'text','text':'" + secret + "'}}]"}
+        await response('first', invalid)
+        diagnostic = await browser_event('tool_diagnostic')
+        self.assertTrue(diagnostic['retryable'])
+        self.assertEqual(diagnostic['details']['string_form'], 'single_quoted_keys')
+        self.assertEqual(diagnostic['details']['parse_issue'], 'property_quotes')
+        self.assertIsInstance(diagnostic['details']['position'], int)
+        self.assertNotIn(secret, json.dumps(diagnostic))
+        self.assertNotIn('format_example', diagnostic['details'])
+        self.assertEqual((await self.h.events.get())['type'], 'conversation.item.create')
+        self.assertEqual((await self.h.events.get())['type'], 'response.create')
+
+        await response('second', invalid)
+        self.assertFalse((await browser_event('tool_diagnostic'))['retryable'])
+        self.assertIn('未执行动作', (await browser_event('notice'))['message'])
+        self.assertEqual((await self.h.events.get())['type'], 'conversation.item.create')
+        self.assertTrue(self.h.events.empty())
+        await response('extra', invalid)
+        self.assertEqual((await browser_event('tool_diagnostic'))['details']['reason'], 'turn_action_retry_limit')
+        self.assertEqual((await self.h.events.get())['type'], 'conversation.item.create')
+        self.assertTrue(self.h.events.empty())
+        self.assertFalse(any(e['type'] == 'command.execute' for e in self.device.events))
+
+        await voice.send_bytes(bytes(3200))
+        self.assertEqual((await self.h.events.get())['type'], 'input_audio_buffer.append')
+        self.assertFalse(voice.closed)
+        await provider.send_json({'type': 'input_audio_buffer.speech_started'})
+        await browser_event('listening')
+        await provider.send_json({'type': 'input_audio_buffer.speech_stopped'})
+        await response('new_turn', {'steps': [{'screen': {'page': 'face', 'expression': 'happy'}, 'hold_ms': 100}]})
+        output = await asyncio.wait_for(self.h.events.get(), 2)
+        self.assertEqual(output['type'], 'conversation.item.create')
+        self.assertEqual(json.loads(output['item']['output'])['status'], 'accepted')
+        self.assertEqual((await self.h.events.get())['type'], 'response.create')
+        self.assertEqual(sum(e['type'] == 'command.execute' for e in self.device.events), 1)
+        await voice.close()
+        await until(lambda: self.hub.control is None)
+
     async def test_hangup_and_logout_release_device(self):
         voice = await self.h.socket()
         await voice.receive_json(timeout=2)
@@ -817,18 +881,18 @@ class ToolCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         await self.tools.close()
         self.assertFalse(self.notices)
 
-    def response(self, calls, *, done=True, reverse=False):
-        self.tools.handle({'type': 'response.created', 'response': {'id': 'r1'}})
+    def response(self, calls, *, done=True, reverse=False, identifier='r1'):
+        self.tools.handle({'type': 'response.created', 'response': {'id': identifier}})
         items = []
         for i, (name, arguments) in enumerate(calls):
-            items.append({'type': 'function_call', 'call_id': f'call_{i}', 'name': name,
+            items.append({'type': 'function_call', 'call_id': f'call_{i}' if identifier == 'r1' else f'{identifier}_call_{i}', 'name': name,
                           'arguments': arguments})
         for i in (reversed(range(len(items))) if reverse else range(len(items))):
-            self.tools.handle({'type': 'response.output_item.added', 'response_id': 'r1', 'output_index': i, 'item': items[i]})
-            self.tools.handle({'type': 'response.function_call_arguments.done', 'response_id': 'r1',
+            self.tools.handle({'type': 'response.output_item.added', 'response_id': identifier, 'output_index': i, 'item': items[i]})
+            self.tools.handle({'type': 'response.function_call_arguments.done', 'response_id': identifier,
                                'output_index': i, **{k: items[i][k] for k in ('call_id', 'name', 'arguments')}})
         if done:
-            self.tools.handle({'type': 'response.done', 'response': {'id': 'r1', 'status': 'completed', 'output': items}})
+            self.tools.handle({'type': 'response.done', 'response': {'id': identifier, 'status': 'completed', 'output': items}})
         return items
 
     async def test_output_index_order_dedup_and_single_continuation(self):
@@ -842,6 +906,115 @@ class ToolCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([x['item']['call_id'] for x in self.output if 'item' in x], ['call_0', 'call_1'])
         self.assertEqual(sum(x['type'] == 'response.create' for x in self.output), 1)
         self.assertEqual(self.tools.epoch, 0)
+
+    async def reject_target(self, name, arguments):
+        self.control.calls.append((name, arguments))
+        return {'ok': False, 'error_code': 'INVALID_ARGUMENT', 'simulated': True,
+                'details': {'reason': 'steps_json_encoding', 'field': '$.steps',
+                            'parse_issue': 'property_quotes', 'position': 2,
+                            'string_form': 'single_quoted_keys'}}
+
+    def results(self):
+        return [json.loads(e['item']['output']) for e in self.output if e['type'] == 'conversation.item.create']
+
+    async def test_second_rejection_blocks_further_validation_in_same_response(self):
+        self.control.execute = self.reject_target
+        diagnostics = []
+        async def diagnostic(name, result, call_id):
+            diagnostics.append(result)
+        self.tools.diagnostic = diagnostic
+        self.response([('stackchan_perform_targets', '{"steps":"bad"}')]*3)
+        await self.tools.responses['r1'].task
+        results = self.results()
+        self.assertEqual(len(self.control.calls), 2)
+        self.assertEqual([r['retryable'] for r in results], [True, False, False])
+        self.assertEqual([r['validation_failures'] for r in results], [1, 2, 2])
+        self.assertEqual(results[-1]['details']['reason'], 'turn_action_retry_limit')
+        self.assertTrue(all(c['state'] == 'settled' for c in self.tools.calls.values()))
+        self.assertFalse(any(e['type'] == 'response.create' for e in self.output))
+        self.assertIn('保留原目标', results[0]['details']['repair_hint'])
+        self.assertNotIn('format_example', results[0]['details'])
+        for fabricated in ('happy', 'laughing', 'yaw_deg', 'pitch_deg', '1500'):
+            self.assertNotIn(fabricated, results[0]['details']['repair_hint'])
+        self.assertEqual(diagnostics[0]['details']['parse_issue'], 'property_quotes')
+        self.assertEqual(len(self.notices), 1)
+        self.assertIn('未执行动作', self.notices[0])
+        self.notices.clear()
+
+    async def test_budget_spans_responses_and_only_new_speech_resets_it(self):
+        self.control.execute = self.reject_target
+        for identifier in ('r1', 'r2', 'r3'):
+            self.response([('stackchan_perform_targets', '{"steps":"bad"}')], identifier=identifier)
+            await self.tools.responses[identifier].task
+        self.assertEqual(len(self.control.calls), 2)
+        self.assertEqual(sum(e['type'] == 'response.create' for e in self.output), 1)
+        self.assertFalse(self.results()[-1]['retryable'])
+        self.assertEqual(len(self.notices), 1)
+        self.notices.clear()
+        self.tools.invalidate()  # A manual interrupt alone is not a new user utterance.
+        self.response([('stackchan_perform_targets', '{}')], identifier='r4')
+        await self.tools.responses['r4'].task
+        self.assertEqual(len(self.control.calls), 2)
+        self.tools.handle({'type': 'input_audio_buffer.speech_started'})
+        self.tools.handle({'type': 'input_audio_buffer.speech_stopped'})
+        self.response([('stackchan_perform_targets', '{"steps":"bad"}')], identifier='r5')
+        await self.tools.responses['r5'].task
+        self.assertEqual(len(self.control.calls), 3)
+        self.assertTrue(self.results()[-1]['retryable'])
+        self.assertEqual(self.results()[-1]['validation_failures'], 1)
+        self.assertEqual(sum(e['type'] == 'response.create' for e in self.output), 2)
+
+    async def test_one_correction_can_succeed_and_duplicate_call_does_not_execute_again(self):
+        async def correct(name, arguments):
+            if not self.control.calls:
+                return await self.reject_target(name, arguments)
+            self.control.calls.append((name, arguments))
+            return {'ok': True, 'status': 'accepted', 'command_id': 'real-command', 'simulated': True}
+        self.control.execute = correct
+        self.response([('stackchan_perform_targets', '{}')])
+        await self.tools.responses['r1'].task
+        items = self.response([('stackchan_perform_targets', '{"steps":[]}')], identifier='r2')
+        await self.tools.responses['r2'].task
+        self.tools.handle({'type': 'response.function_call_arguments.done', 'response_id': 'r2',
+                           'output_index': 0, **{k: items[0][k] for k in ('call_id', 'name', 'arguments')}})
+        self.assertEqual(len(self.control.calls), 2)
+        self.assertEqual([r['retryable'] for r in self.results()], [True, False])
+        self.assertFalse(self.tools.action_budget.blocked)
+        self.assertEqual(sum(e['type'] == 'response.create' for e in self.output), 2)
+
+    async def test_unknown_action_outcome_never_allows_model_retry_or_continuation(self):
+        async def unknown(name, arguments):
+            self.control.calls.append((name, arguments))
+            return {'ok': False, 'error_code': 'ACK_TIMEOUT', 'command_id': 'unconfirmed', 'status': 'unknown'}
+        self.control.execute = unknown
+        self.response([('stackchan_perform_targets', '{}')]*2)
+        await self.tools.responses['r1'].task
+        self.assertEqual(len(self.control.calls), 1)
+        self.assertTrue(all(r['retryable'] is False for r in self.results()))
+        self.assertFalse(any(e['type'] == 'response.create' for e in self.output))
+        self.assertEqual(len(self.notices), 1)
+        self.assertNotIn('未执行动作', self.notices[0])
+        self.notices.clear()
+
+    async def test_new_turn_does_not_inherit_cancelled_inflight_rejection(self):
+        async def delayed(name, arguments):
+            self.control.calls.append((name, arguments))
+            await self.control.gate.wait()
+            return {'ok': False, 'error_code': 'INVALID_ARGUMENT'}
+        self.control.gate.clear()
+        self.control.execute = delayed
+        self.response([('stackchan_perform_targets', '{}')])
+        await until(lambda: self.control.calls)
+        self.tools.handle({'type': 'input_audio_buffer.speech_started'})
+        self.tools.invalidate()
+        self.control.gate.set()
+        await asyncio.sleep(.01)
+        self.assertEqual(self.tools.action_budget.failures, 0)
+        self.assertFalse(self.output)
+        self.tools.handle({'type': 'input_audio_buffer.speech_stopped'})
+        self.response([('stackchan_perform_targets', '{}')], identifier='r2')
+        await self.tools.responses['r2'].task
+        self.assertTrue(self.results()[-1]['retryable'])
 
     async def test_error_diagnostics_are_separate_from_spoken_output(self):
         diagnostics = []
@@ -883,7 +1056,8 @@ class ToolCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.response([('stackchan_perform', '{')])
         await self.tools.responses['r1'].task
         result = json.loads(self.output[0]['item']['output'])
-        self.assertEqual(result, {'ok': False, 'error_code': 'INVALID_ARGUMENT', 'simulated': True})
+        self.assertEqual((result['ok'], result['error_code'], result['simulated']), (False, 'INVALID_ARGUMENT', True))
+        self.assertTrue(result['retryable'])
         self.assertFalse(self.control.calls)
 
     async def test_duplicate_argument_keys_reject_before_device_execution(self):

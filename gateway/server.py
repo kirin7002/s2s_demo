@@ -142,7 +142,8 @@ class Session:
                             ('command_id', 'requested_duration_ms', 'effective_duration_ms', 'status') if key in result})
             return
         await self.emit('tool_diagnostic', tool=name, call_id=call_id, **{key: result[key] for key in
-                        ('error_code', 'details', 'command_id', 'status') if key in result})
+                        ('error_code', 'details', 'command_id', 'status', 'retryable',
+                         'validation_failures', 'corrections_remaining', 'action_dispatched') if key in result})
 
     async def emit(self, kind, **fields):
         await asyncio.wait_for(self.browser.send_json({"type": kind, **fields}), 5)

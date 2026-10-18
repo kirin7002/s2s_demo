@@ -140,7 +140,7 @@ async function start() {
           case 'turn_done': assistant = null; status('继续聆听', '可以继续说话。', 'listening'); break;
           case 'transcript': transcript(message.role, message.text); break;
           case 'tool_diagnostic':
-            transcript('diagnostic', `${message.tool}：${message.error_code || '执行未确认'}${message.details ? ' ' + JSON.stringify(message.details) : ''}`); break;
+            transcript('diagnostic', `${message.tool}：${message.error_code || '执行未确认'}${message.details ? ' ' + JSON.stringify(message.details) : ''}${message.retryable === false ? '；本轮不再重试' : ''}`); break;
           case 'tool_timing':
             transcript('diagnostic', `动作时序已调整：${message.requested_duration_ms} → ${message.effective_duration_ms} 毫秒；完成情况以设备回执为准。`); break;
           case 'notice': el('detail').textContent = message.message; break;

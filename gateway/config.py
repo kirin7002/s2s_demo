@@ -116,6 +116,7 @@ class Config:
             instructions += (
                 "【设备动作】使用stackchan_perform_targets自由选择目标关键帧steps：姿态、表情、灯光与先后顺序。"
                 "不填写at_ms、move_ms或duration_ms，不计算速度、时长或插帧；这些由网关和设备负责。"
+                "steps直接使用JSON数组，不要再编码成字符串。"
                 "每个step内的输出同时开始，hold_ms表示到位后的停顿；pace可选gentle/normal/brisk。"
                 "设备已绑定在线时，StackChan是个人助理的非语言表达载体，语言与目标动作共同构成自然短回应。"
                 "明确否定、赞同等适合肢体表达的短回应，默认主动规划一次轻量姿态表达："
@@ -138,7 +139,8 @@ class Config:
                 "accepted只代表接纳；按effective_duration_ms和get_command真实终态确认完成，不能提前说成功。"
                 "simulated=true时明确仅模拟执行，simulated未知也不能声称真机已执行。"
                 "无法放进设备边界的计划会整体拒绝，不裁剪拆分或自动反复尝试。"
-                "参数错误按details的字段原因处理，最多明确修正一次；OUT_OF_RANGE不可猜成锁定或校准故障。"
+                "参数错误仅在retryable=true时按details明确修正一次；retryable=false时结束本轮动作、等待新语音，不再调用动作工具。"
+                "OUT_OF_RANGE不可猜成锁定或校准故障。"
                 "只有NOT_CALIBRATED表示未校准，BUSY/DEVICE_BUSY表示占用。"
                 "MOTION_TIMEOUT、SCHEDULER_OVERRUN、硬件异常或结果未知时停止后续动作，不自动重试。"
                 "故障后本会话头部命令会被拒绝，stop不会清除；等用户确认设备并重新接通。"

@@ -37,6 +37,44 @@ def _constant(_):
     raise ValueError('nonfinite constant')
 
 
+def _syntax_details(text, error):
+    """Describe grammar only; never echo source text, keys, or string values."""
+    value = text.strip()
+    if not value:
+        form = 'empty'
+    elif value.startswith('```'):
+        form = 'code_fence'
+    elif (value.startswith(('[', '{')) and isinstance(error, json.JSONDecodeError)
+          and error.msg == 'Expecting property name enclosed in double quotes'
+          and text[error.pos:error.pos+1] == "'"):
+        form = 'single_quoted_keys'
+    elif (value.startswith(('[', '{')) and isinstance(error, json.JSONDecodeError)
+          and error.msg == 'Expecting property name enclosed in double quotes'
+          and text[error.pos:error.pos+2] == '\\"'):
+        form = 'escaped_property_quotes'
+    elif value.startswith(('[', '{')):
+        form = 'json_like_container'
+    else:
+        form = 'non_container_text'
+    details = {'string_form': form}
+    if isinstance(error, json.JSONDecodeError):
+        reasons = {'Expecting property name enclosed in double quotes': 'property_quotes',
+                   'Expecting value': 'expected_value', 'Extra data': 'extra_data',
+                   "Expecting ',' delimiter": 'comma_delimiter',
+                   "Expecting ':' delimiter": 'colon_delimiter',
+                   'Unterminated string starting at': 'unterminated_string'}
+        issue = reasons.get(error.msg, 'invalid_json_syntax')
+        if error.pos < len(text) and text[error.pos] in ']}' and text[:error.pos].rstrip().endswith(','):
+            issue = 'trailing_comma'
+        details.update(parse_issue=issue, position=error.pos)
+    elif isinstance(error, RecursionError):
+        details['parse_issue'] = 'excessive_nesting'
+    else:
+        details['parse_issue'] = {'duplicate key': 'duplicate_key', 'nonfinite number': 'nonfinite_number',
+                                  'nonfinite constant': 'nonfinite_number'}.get(str(error), 'invalid_json_value')
+    return details
+
+
 def normalize_target_input(arguments):
     """Return (unchanged-or-normalized copy, content-free metadata).
 
@@ -63,9 +101,10 @@ def normalize_target_input(arguments):
     if isinstance(steps, str):
         try:
             steps = json.loads(steps, object_pairs_hook=_object, parse_float=_float, parse_constant=_constant)
-        except (ValueError, TypeError, RecursionError):
+        except (ValueError, TypeError, RecursionError) as error:
             raise TimingPlanError('INVALID_ARGUMENT', reason='steps_json_encoding', field='$.steps',
-                                  expected_type='array', received_type='string') from None
+                                  expected_type='array', received_type='string',
+                                  **_syntax_details(steps, error)) from None
         changes.append('decode_steps_json_once')
     if isinstance(steps, dict) and any(key in steps for key in ('head', 'screen', 'light')):
         steps = [steps]

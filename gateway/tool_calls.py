@@ -3,6 +3,8 @@ import asyncio
 from dataclasses import dataclass, field
 import json
 
+ACTION_TOOLS = {'stackchan_perform_targets', 'stackchan_perform'}
+
 class ToolProtocolError(Exception):
     pass
 
@@ -18,6 +20,15 @@ def unique_json_object(pairs):
 
 
 @dataclass
+class ActionBudget:
+    failures: int = 0
+    dispatched: bool = False
+    blocked: bool = False
+    block_reason: str = ''
+    notice_sent: bool = False
+
+
+@dataclass
 class Response:
     id: str
     epoch: int
@@ -26,6 +37,7 @@ class Response:
     items: dict = field(default_factory=dict)
     calls: dict = field(default_factory=dict)
     task: object = None
+    budget: ActionBudget = field(default_factory=ActionBudget)
 
 
 class ToolCalls:
@@ -39,6 +51,7 @@ class ToolCalls:
         self.closed = False
         self.fences = set()
         self.serial = asyncio.Lock()
+        self.action_budget = ActionBudget()
 
     def valid(self, response):
         return not self.closed and not response.cancelled and response.epoch == self.epoch
@@ -70,6 +83,8 @@ class ToolCalls:
         if kind in {'response.created', 'response.done'} and not isinstance(details, dict):
             raise ToolProtocolError('Invalid response')
         if kind == 'input_audio_buffer.speech_started':
+            if not self.user_speaking:
+                self.action_budget = ActionBudget()
             self.user_speaking = True
             return
         if kind == 'input_audio_buffer.speech_stopped':
@@ -82,7 +97,7 @@ class ToolCalls:
             if identifier not in self.responses:
                 if len(self.responses) >= 128:
                     raise ToolProtocolError('Response limit')
-                self.responses[identifier] = Response(identifier, self.epoch)
+                self.responses[identifier] = Response(identifier, self.epoch, budget=self.action_budget)
             self.active_response = identifier
             return
         identifier = event.get('response_id')
@@ -147,6 +162,37 @@ class ToolCalls:
         if not task.cancelled():
             task.exception()
 
+    def blocked_action(self, budget):
+        return {'ok': False, 'error_code': 'INVALID_ARGUMENT' if budget.block_reason == 'validation' else 'NOT_READY',
+                'details': {'reason': 'turn_action_retry_limit' if budget.block_reason == 'validation'
+                            else 'turn_action_not_retryable'},
+                'retryable': False, 'validation_failures': budget.failures, 'corrections_remaining': 0,
+                'action_dispatched': False, 'simulated': self.control.simulated}
+
+    def action_result(self, budget, result, name):
+        """Bound model-authored corrections; never replay an action ourselves."""
+        result = dict(result)
+        result['retryable'] = False
+        if result.get('command_id') or result.get('status') in {'accepted', 'running', 'completed'}:
+            budget.dispatched = True
+        preflight = result.get('error_code') in {'INVALID_ARGUMENT', 'OUT_OF_RANGE'} and not result.get('command_id')
+        if preflight:
+            budget.failures += 1
+            result.update(retryable=budget.failures == 1 and not budget.dispatched,
+                          validation_failures=budget.failures, action_dispatched=False,
+                          corrections_remaining=int(budget.failures == 1 and not budget.dispatched))
+            if result['retryable'] and name == 'stackchan_perform_targets':
+                details = dict(result.get('details') or {})
+                if details.get('field') == '$.steps':
+                    details['repair_hint'] = 'steps必须是直接的对象数组，不是文本；将原步骤对象直接放进数组，保留原目标、值和顺序，不新增动作。'
+                    result['details'] = details
+            if not result['retryable']:
+                budget.blocked, budget.block_reason = True, 'validation'
+        elif result.get('ok') is False or result.get('error_code') or result.get('status') in {'unknown', 'failed', 'rejected'}:
+            budget.blocked, budget.block_reason = True, 'execution'
+            result['corrections_remaining'] = 0
+        return result
+
     async def execute(self, response):
         try:
             async with self.serial:
@@ -155,12 +201,18 @@ class ToolCalls:
                     if not self.valid(response):
                         return
                     call['state'] = 'executing'
-                    try:
-                        arguments = json.loads(call['arguments'], object_pairs_hook=unique_json_object,
-                                               parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
-                        result = await self.control.execute(call['name'], arguments)
-                    except (ValueError, TypeError, RecursionError):
-                        result = {'ok': False, 'error_code': 'INVALID_ARGUMENT', 'simulated': self.control.simulated}
+                    action = call['name'] in ACTION_TOOLS
+                    if action and response.budget.blocked:
+                        result = self.blocked_action(response.budget)
+                    else:
+                        try:
+                            arguments = json.loads(call['arguments'], object_pairs_hook=unique_json_object,
+                                                   parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+                            result = await self.control.execute(call['name'], arguments)
+                        except (ValueError, TypeError, RecursionError):
+                            result = {'ok': False, 'error_code': 'INVALID_ARGUMENT', 'simulated': self.control.simulated}
+                        if action and self.valid(response):
+                            result = self.action_result(response.budget, result, call['name'])
                     if not self.valid(response):
                         call['state'] = 'cancelled'
                         return
@@ -171,7 +223,16 @@ class ToolCalls:
                         'type': 'function_call_output', 'call_id': call['call_id'],
                         'output': json.dumps(result, ensure_ascii=False, separators=(',', ':'), allow_nan=False)}})
                     call['state'] = 'settled'
+                    if response.budget.blocked and not response.budget.notice_sent:
+                        response.budget.notice_sent = True
+                        if response.budget.block_reason == 'validation':
+                            message = ('这次动作参数未通过，未执行此动作；请继续说话。' if response.budget.dispatched
+                                       else '本轮动作参数校验失败，未执行动作；请继续说话。')
+                        else:
+                            message = '动作执行未确认或不可用，不会自动重试；请继续说话或查询状态。'
+                        await self.notice(message)
                 if (self.valid(response) and not self.user_speaking and self.active_response == response.id
+                        and not response.budget.blocked
                         and all(call['state'] == 'settled' for call in response.calls.values())):
                     await self.send({'type': 'response.create'})
         except asyncio.CancelledError:

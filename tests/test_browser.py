@@ -239,9 +239,10 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.listening()
         await self.page.evaluate("""() => window.__sockets[0].onmessage({data: JSON.stringify({
             type:'tool_diagnostic', tool:'stackchan_perform', error_code:'OUT_OF_RANGE',
-            details:{reason:'speed', frame_index:1, minimum_move_ms:1334}
+            retryable:false, details:{reason:'speed', frame_index:1, minimum_move_ms:1334}
         })})""")
         self.assertIn('1334', await self.page.locator('#transcripts').inner_text())
+        self.assertIn('本轮不再重试', await self.page.locator('#transcripts').inner_text())
         await self.page.evaluate("""() => window.__sockets[0].onmessage({data: JSON.stringify({
             type:'tool_timing', requested_duration_ms:2500, effective_duration_ms:3501
         })})""")
