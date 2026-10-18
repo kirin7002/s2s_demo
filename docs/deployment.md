@@ -12,7 +12,20 @@
 本机固件侧读取候选配置`.run/s2s-cloud/device-config.json`；仅管理员激活后才能切换固件。
 ISRG Root X1与现有站点主机名已验证；不能关闭设备TLS校验。
 设备侧已读取此配置准备最终固件，token/CA保持原样，不自动生成另一套身份。
-自动审批曾拒绝助手上传设备Bearer配置；代码包上传不含秘密，凭据尚待明确传输授权。
+自动审批最初因缺少特定目的地授权拒绝助手上传设备Bearer配置；用户随后明确允许上传到
+47.116.102.49的该路径，现已传输且0600/原字节哈希一致，token/CA未改变。
+
+最终release：`/home/kirin/apps/s2s_demo/releases/gateway-128386686b86`。
+压缩包SHA、逐文件清单、Linux Python3.12原生依赖导入、四工具和正常会话配置均已在远端验证；
+未调用模型、未改变容器或代理。旧`gateway-fc759e8a4711`为被新方向取代的准备包，不要部署。
+用户在自己的终端执行这一条，并亲自输入服务器sudo密码：
+
+```sh
+ssh -t -F /Users/kirin/go_path/jev_demo/.run/server-management/ssh_config aliyun-kirin 'sudo python3 /home/kirin/apps/s2s_demo/releases/gateway-128386686b86/deploy/update_gateway.py --approve-gateway-update'
+```
+
+需要手动回退时，同一命令改用`--rollback-gateway-update`。脚本还会在健康失败时自动回滚。
+Docker权限和免密sudo仍不可用，助手没有执行这一步，当前站点仍旧版，设备尚未接入公网。
 
 `deploy/update_gateway.py --approve-gateway-update`必须由管理员执行。当前SSH用户无法访问Docker socket，
 `sudo -n`也不可用，因此助手无法代执行。准备完成后的**精确一条命令**位于私密目录

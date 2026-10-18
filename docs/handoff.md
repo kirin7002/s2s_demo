@@ -34,7 +34,13 @@
 `deploy/update_gateway.py`准备仅更新现有S2S容器，沿用云端原登录/模型/反代网络，离线wheel构建，
 加入设备鉴权和无文本动作审计，移除临时角度限制；失败自动恢复旧容器，支持显式手动回滚。
 云端配置token/CA必须与设备侧已读的`.run/s2s-cloud/device-config.json`保持一致，不生成替代身份。
-自动审批曾拒绝上传该设备Bearer配置，尚未传输；代码/公开依赖可上传，凭据传输须明确授权。
+自动审批最初因特定目的地授权不足拒绝上传设备Bearer；用户随后明确批准47.116.102.49的
+`/home/kirin/apps/s2s_demo/shared/stackchan-device-config.json`，已上传且0600/原字节哈希验证一致。
+最终代码release为`/home/kirin/apps/s2s_demo/releases/gateway-128386686b86`，远端包SHA、清单、
+Linux依赖和正常会话配置验证通过；精确sudo更新命令在`.run/s2s-cloud/deploy-command.txt`，手动回滚命令在`rollback-command.txt`。
+当前Docker和sudo权限仍阻断助手切换容器，需要用户亲自在终端执行；不使用历史聊天密码。
+旧fc759e8准备包已被最新无临时限制版本替代，不要激活。手机URL为https://s2s.kirinxu.cn/login，
+先完成管理员更新与设备侧最终固件切换，再使用原云端演示口令关联设备并真实通话。
 管理员发布包/命令的实际路径见`.run/s2s-cloud/`及部署文档；必须完成管理员更新后再将固件改为公网配置。
 全量本机125项（含Chrome）与JS4项通过，后续新增2项显式回滚保护也通过；未执行线上容器切换或Docker构建。
 
