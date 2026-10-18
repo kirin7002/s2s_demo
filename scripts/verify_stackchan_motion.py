@@ -27,7 +27,7 @@ def require(condition, code, evidence=None):
 def frame(at, yaw, pitch, expression='happy', rgb=None, move=1200):
     return {'at_ms': at, 'head': {'yaw_deg': yaw, 'pitch_deg': pitch, 'move_ms': move},
             'screen': {'page': 'face', 'expression': expression},
-            'light': {'rgb': rgb or [0, 12, 12], 'brightness': .08, 'fade_ms': 100}}
+            'light': {'rgb': rgb or [0, 255, 255], 'brightness': .08, 'fade_ms': 100}}
 
 
 class MotionSuite:
@@ -135,9 +135,9 @@ class MotionSuite:
         poses = [(3, 0), (-3, 0), (0, 0)] if axis == 'yaw' else [(0, 3), (0, -3), (0, 0)]
         label = 'shake_with_half_second_holds' if axis == 'yaw' else 'nod_with_half_second_holds'
         arguments = {'duration_ms': 5000, 'frames': [
-            frame(0, *poses[0], 'happy', [0, 12, 12]),
-            frame(1700, *poses[1], 'laughing', [12, 8, 0]),
-            frame(3400, *poses[2], 'scared', [0, 0, 12])]}
+            frame(0, *poses[0], 'happy', [0, 255, 255]),
+            frame(1700, *poses[1], 'laughing', [255, 170, 0]),
+            frame(3400, *poses[2], 'scared', [0, 0, 255])]}
         command, started = await self.execute(arguments, label)
         for index, (when, target) in enumerate(zip((1.4, 3.1, 4.8), poses)):
             await self.until(started + when)
