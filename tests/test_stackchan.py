@@ -1,5 +1,6 @@
 """Local transport/fault fixtures; no model, device credentials or hardware."""
 import asyncio
+import copy
 import json
 import unittest
 
@@ -36,6 +37,9 @@ class DeviceFixture:
         self.events = []
         self.commands = {}
         self.ack = True
+        self.pose = {'yaw_deg': 0, 'pitch_deg': 0}
+        self.query_enabled = True
+        self.query_gate = None
         self.sync = asyncio.Event()
         self.sync.set()
         self.jobs = set()
@@ -75,9 +79,13 @@ class DeviceFixture:
                 if self.ack:
                     await self.status(message, 'accepted')
             elif message['type'] == 'device.query':
+                if self.query_gate:
+                    await self.query_gate.wait()
+                if not self.query_enabled:
+                    continue
                 record = self.commands.get(message.get('command_id'), {})
                 await self.ws.send_json({**message, 'type': 'device.state', 'capabilities': CAPABILITIES,
-                                         'state': {'head': {'yaw_deg': 0, 'pitch_deg': 0}},
+                                         'state': self.pose,
                                          'status': 'unknown', **record,
                                          'request_id': message['request_id'], 'type': 'device.state'})
 
@@ -90,6 +98,28 @@ class DeviceFixture:
 
 
 class ContractTests(unittest.TestCase):
+    def test_speed_diagnostics_use_adjacent_targets_and_max_axis(self):
+        caps = copy.deepcopy(CAPABILITIES)
+        caps['head']['max_speed_deg_s'] = 30
+        args = {'duration_ms': 3000, 'frames': [
+            {'at_ms': 0, 'head': {'yaw_deg': -20, 'pitch_deg': 0, 'move_ms': 1000}},
+            {'at_ms': 1000, 'head': {'yaw_deg': 20, 'pitch_deg': 5, 'move_ms': 500}}]}
+        original = copy.deepcopy(args)
+        with self.assertRaises(DeviceError) as raised:
+            validate_frames(args, caps, initial_pose={'yaw_deg': 0, 'pitch_deg': 0})
+        result = raised.exception.result()
+        self.assertEqual(result['error_code'], 'OUT_OF_RANGE')
+        self.assertEqual(result['details']['reason'], 'speed')
+        self.assertEqual(result['details']['frame_index'], 1)
+        self.assertEqual(result['details']['minimum_move_ms'], 1334)
+        self.assertEqual(result['details']['recommended_move_ms'], 1584)
+        self.assertEqual(args, original)
+        args['frames'][1]['head']['move_ms'] = 1334
+        validate_frames(args, caps, initial_pose={'yaw_deg': 0, 'pitch_deg': 0})
+        args['frames'][1]['head']['move_ms'] = 1333
+        with self.assertRaises(DeviceError):
+            validate_frames(args, caps)
+
     def test_boundary_sequences_and_schema_rejection(self):
         validator = PARAMETERS['stackchan_perform']
         for duration in (100, 8000):
@@ -132,6 +162,10 @@ class ContractTests(unittest.TestCase):
                 self.assertEqual(base[key], tools[key])
         self.assertEqual(len(tools['tools']), 4)
         self.assertIn('模拟', tools['instructions'])
+        for text in ('ceil(distance/max_speed_deg_s*1000)', '1584ms', 'details.reason', '20个中文字符', '不可猜测锁定'):
+            self.assertIn(text, tools['instructions'])
+        perform = next(t for t in tools['tools'] if t['function']['name'] == 'stackchan_perform')
+        self.assertIn('1584', perform['function']['description'])
         self.assertNotIn(TOKEN, repr(config) + json.dumps(tools))
 
 
@@ -158,6 +192,75 @@ class DeviceGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['error_code'], 'NOT_READY')
         self.assertIsNone(self.hub.control)
         self.assertFalse(self.hub.records)
+
+    async def test_first_head_frame_uses_new_query_not_cached_pose(self):
+        self.device.pose = {'yaw_deg': -50, 'pitch_deg': 0}
+        scene = {'duration_ms': 1000, 'frames': [{'at_ms': 0,
+                 'head': {'yaw_deg': 50, 'pitch_deg': 0, 'move_ms': 200}}]}
+        result = await self.control.execute('stackchan_perform', scene)
+        self.assertEqual(result['details']['reason'], 'speed')
+        self.assertEqual(result['details']['frame_index'], 0)
+        self.assertEqual(result['details']['minimum_move_ms'], 834)
+        self.assertFalse(any(e['type'] == 'command.execute' for e in self.device.events))
+        self.device.pose = {'yaw_deg': 49, 'pitch_deg': 0}
+        result = await self.control.execute('stackchan_perform', scene)
+        self.assertEqual(result['status'], 'accepted')
+
+    async def test_head_needs_fresh_pose_but_screen_does_not(self):
+        self.device.query_enabled = False
+        scene = {'duration_ms': 1000, 'frames': [{'at_ms': 0,
+                 'head': {'yaw_deg': 1, 'pitch_deg': 0, 'move_ms': 500}}]}
+        result = await self.control.execute('stackchan_perform', scene)
+        self.assertEqual(result['error_code'], 'NOT_READY')
+        self.assertEqual(result['details']['reason'], 'fresh_pose_unavailable')
+        self.assertFalse(any(e['type'] == 'command.execute' for e in self.device.events))
+        self.assertEqual((await self.control.execute('stackchan_perform', SCENE))['status'], 'accepted')
+
+    async def test_hardware_fault_blocks_model_head_retry_even_after_stop(self):
+        scene = {'duration_ms': 1000, 'frames': [{'at_ms': 0,
+                 'head': {'yaw_deg': 1, 'pitch_deg': 0, 'move_ms': 500}}]}
+        first = await self.control.execute('stackchan_perform', scene)
+        command = next(e for e in self.device.events if e.get('command_id') == first['command_id'])
+        await self.device.status(command, 'failed', error_code='SCHEDULER_OVERRUN')
+        await until(lambda: self.control.motion_fault == 'SCHEDULER_OVERRUN')
+        await self.control.execute('stackchan_stop', {})
+        retry = await self.control.execute('stackchan_perform', scene)
+        self.assertEqual(retry['error_code'], 'NOT_READY')
+        self.assertEqual(retry['details']['reason'], 'head_motion_fault_latched')
+        self.assertEqual(sum(e['type'] == 'command.execute' for e in self.device.events), 1)
+        state = await self.control.execute('stackchan_get_state', {})
+        self.assertEqual(state['head_motion_fault'], 'SCHEDULER_OVERRUN')
+        self.assertEqual((await self.control.execute('stackchan_perform', SCENE))['status'], 'accepted')
+
+    async def test_stop_during_pose_query_fences_preflight_action(self):
+        await self.control.ensure()
+        self.device.query_gate = asyncio.Event()
+        scene = {'duration_ms': 1000, 'frames': [{'at_ms': 0,
+                 'head': {'yaw_deg': 1, 'pitch_deg': 0, 'move_ms': 500}}]}
+        task = asyncio.create_task(self.control.execute('stackchan_perform', scene))
+        await until(lambda: any(e['type'] == 'device.query' for e in self.device.events))
+        fence = asyncio.create_task(self.control.fence())
+        self.device.query_gate.set()
+        result = await task
+        await fence
+        self.assertEqual(result['error_code'], 'STALE_CONTEXT')
+        self.assertFalse(any(e['type'] == 'command.execute' for e in self.device.events))
+
+    async def test_resource_target_and_timeline_errors_are_distinct(self):
+        cases = [({**SCENE, 'duration_ms': 8001}, 'duration', None),
+                 ({**SCENE, 'frames': SCENE['frames'] * 17}, 'frame_count', None),
+                 ({'duration_ms': 1000, 'frames': [{'at_ms': 0, 'head': {
+                     'yaw_deg': 61, 'pitch_deg': 0, 'move_ms': 500}}]}, 'target', 0),
+                 ({'duration_ms': 200, 'frames': [{'at_ms': 0, 'head': {
+                     'yaw_deg': 1, 'pitch_deg': 0, 'move_ms': 500}}]}, 'duration', 0)]
+        for args, reason, frame in cases:
+            result = await self.control.execute('stackchan_perform', args)
+            self.assertEqual(result['error_code'], 'OUT_OF_RANGE')
+            self.assertEqual(result['details']['reason'], reason)
+            self.assertEqual(result['details']['frame_index'], frame)
+        malformed = await self.control.execute('stackchan_perform', {**SCENE, 'extra': 'private'})
+        self.assertEqual(malformed['error_code'], 'INVALID_ARGUMENT')
+        self.assertFalse(any(e['type'] == 'command.execute' for e in self.device.events))
 
     async def test_live_test_target_limit_rejects_above_three_degrees(self):
         object.__setattr__(self.h.cfg, 'stackchan_test_max_deg', 3)
@@ -437,6 +540,22 @@ class ToolCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([x['item']['call_id'] for x in self.output if 'item' in x], ['call_0', 'call_1'])
         self.assertEqual(sum(x['type'] == 'response.create' for x in self.output), 1)
         self.assertEqual(self.tools.epoch, 0)
+
+    async def test_error_diagnostics_are_separate_from_spoken_output(self):
+        diagnostics = []
+        async def diagnostic(name, result, call_id):
+            diagnostics.append((name, result))
+            self.assertEqual(call_id, 'call_0')
+        async def reject(name, args):
+            return DeviceError('OUT_OF_RANGE', details={'reason': 'speed', 'frame_index': 1,
+                                                      'minimum_move_ms': 1334}).result()
+        self.control.execute = reject
+        self.tools.diagnostic = diagnostic
+        self.response([('stackchan_perform', json.dumps(SCENE))])
+        await self.tools.responses['r1'].task
+        self.assertEqual(diagnostics[0][1]['details']['reason'], 'speed')
+        self.assertEqual([event['type'] for event in self.output], ['conversation.item.create', 'response.create'])
+        self.assertEqual(self.output[0]['item']['type'], 'function_call_output')
 
     async def test_incomplete_arguments_and_interrupted_response_never_execute(self):
         self.response([('stackchan_perform', json.dumps(SCENE))], done=False)

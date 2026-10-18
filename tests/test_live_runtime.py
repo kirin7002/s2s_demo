@@ -88,12 +88,21 @@ class LiveRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_action_summary_keeps_motion_parameters_but_never_text(self):
         value = action_summary({'duration_ms': 4000, 'frames': [
             {'at_ms': 0, 'head': {'yaw_deg': -3, 'pitch_deg': 0, 'move_ms': 1200},
+             'light': {'rgb': [0, 255, 0], 'brightness': .1, 'fade_ms': 100},
              'screen': {'page': 'text', 'text': 'synthetic-private-text'}},
             {'at_ms': 2000, 'head': {'yaw_deg': 3, 'pitch_deg': 0, 'move_ms': 1200},
-             'screen': {'expression': 'happy'}}]})
+             'screen': {'page': 'face', 'expression': 'happy'}}]})
         self.assertEqual(value['head_axes']['yaw_deg'], {'min': -3, 'max': 3})
         self.assertEqual(value['move_ms'], [1200, 1200])
+        self.assertEqual(value['head_frames'], [
+            {'frame_index': 0, 'at_ms': 0, 'yaw_deg': -3, 'pitch_deg': 0, 'move_ms': 1200},
+            {'frame_index': 1, 'at_ms': 2000, 'yaw_deg': 3, 'pitch_deg': 0, 'move_ms': 1200}])
         self.assertEqual(value['expressions'], ['happy'])
+        self.assertEqual(value['light_frames'], [{'frame_index': 0, 'at_ms': 0,
+            'rgb': [0, 255, 0], 'brightness': .1, 'fade_ms': 100}])
+        self.assertEqual(value['screen_frames'], [
+            {'frame_index': 0, 'at_ms': 0, 'page': 'text'},
+            {'frame_index': 1, 'at_ms': 2000, 'page': 'face', 'expression': 'happy'}])
         self.assertNotIn('synthetic-private-text', json.dumps(value))
 
     async def test_battery_only_requires_fresh_power_and_zero_vbus(self):

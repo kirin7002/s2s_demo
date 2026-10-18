@@ -26,15 +26,18 @@ QWEN_TOOLS = [{'type': 'function', 'function': {'name': tool['name'],
 IDENTIFIER = re.compile(r'[A-Za-z0-9_-]{1,64}')
 TERMINAL = {'completed', 'failed', 'cancelled', 'rejected'}
 STATUSES = TERMINAL | {'accepted', 'running'}
+MOTION_FAULTS = {'MOTION_TIMEOUT', 'SCHEDULER_OVERRUN', 'HARDWARE_ERROR'}
 
 
 class DeviceError(Exception):
-    def __init__(self, code, command_id=None):
+    def __init__(self, code, command_id=None, *, details=None):
         super().__init__(code)
         self.code, self.command_id = code, command_id
+        self.details = details
 
     def result(self):
         return {'ok': False, 'error_code': self.code,
+                **({'details': self.details} if self.details else {}),
                 **({'command_id': self.command_id, 'status': 'unknown'} if self.command_id else {})}
 
 
@@ -65,16 +68,44 @@ def number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
-def validate_frames(arguments, capabilities):
+def range_error(reason, *, frame_index=None, **details):
+    return DeviceError('OUT_OF_RANGE', details={'reason': reason, 'frame_index': frame_index, **details})
+
+
+def schema_error(errors):
+    """Explain numeric/resource bounds without weakening any input schema rule."""
+    for error in errors:
+        path = list(error.absolute_path)
+        if error.validator not in {'minimum', 'maximum', 'minItems', 'maxItems'}:
+            return DeviceError('INVALID_ARGUMENT')
+        if not (path in (['duration_ms'], ['frames'])
+                or len(path) == 4 and path[0] == 'frames' and path[2] == 'head'):
+            return DeviceError('INVALID_ARGUMENT')
+        # Values are numeric only; never include screen text in diagnostics.
+        if not number(error.instance) and not (path == ['frames'] and isinstance(error.instance, list)):
+            return DeviceError('INVALID_ARGUMENT')
+    error = errors[0]
+    path = list(error.absolute_path)
+    reason = ('duration' if path == ['duration_ms'] else 'frame_count' if path == ['frames']
+              else 'target' if path[-1] in {'yaw_deg', 'pitch_deg'} else 'move_duration')
+    return range_error(reason, frame_index=path[1] if len(path) > 1 else None,
+                       field=path[-1], actual=len(error.instance) if path == ['frames'] else error.instance,
+                       limits={key: error.schema[key] for key in ('minimum', 'maximum', 'minItems', 'maxItems')
+                               if key in error.schema})
+
+
+def validate_frames(arguments, capabilities, initial_pose=None):
     duration, frames = arguments['duration_ms'], arguments['frames']
     for value, key, default in [(len(frames), 'max_frames', 16), (duration, 'max_duration_ms', 8000)]:
         limit = capabilities.get(key, default)
         if type(limit) is not int or limit < 1:
             raise DeviceError('NOT_READY')
+        limit = min(limit, default)
         if value > limit:
-            raise DeviceError('OUT_OF_RANGE')
-    last_at, ends, previous_head = -1, {}, None
-    for frame in frames:
+            raise range_error('frame_count' if key == 'max_frames' else 'duration',
+                              actual=value, limits={key: limit})
+    last_at, ends, previous_head = -1, {}, initial_pose
+    for frame_index, frame in enumerate(frames):
         at = frame['at_ms']
         if (last_at < 0 and at != 0) or at <= last_at or at >= duration:
             raise DeviceError('INVALID_ARGUMENT')
@@ -86,7 +117,11 @@ def validate_frames(arguments, capabilities):
             if not isinstance(capability, dict) or capability.get('enabled') is not True:
                 raise DeviceError('MOTION_DISABLED' if channel == 'head' else 'UNSUPPORTED_CAPABILITY')
             transition = setting.get('move_ms', setting.get('fade_ms', 0))
-            if at < ends.get(channel, 0) or at + transition > duration:
+            if at + transition > duration:
+                raise range_error('duration', frame_index=frame_index, channel=channel,
+                                  minimum_duration_ms=at + transition,
+                                  limits={'max_duration_ms': min(capabilities.get('max_duration_ms', 8000), 8000)})
+            if at < ends.get(channel, 0):
                 raise DeviceError('INVALID_ARGUMENT')
             ends[channel] = at + transition
             if channel == 'head':
@@ -98,15 +133,22 @@ def validate_frames(arguments, capabilities):
                             and all(number(x) for x in bounds) and bounds[0] <= bounds[1]):
                         raise DeviceError('NOT_READY')
                     if not bounds[0] <= setting[axis + '_deg'] <= bounds[1]:
-                        raise DeviceError('OUT_OF_RANGE')
+                        raise range_error('target', frame_index=frame_index, axis=axis,
+                                          actual=setting[axis + '_deg'], limits={axis + '_range_deg': bounds})
                 speed = capability.get('max_speed_deg_s')
                 if not number(speed) or speed <= 0:
                     raise DeviceError('NOT_READY')
-                if previous_head and any(abs(setting[key] - previous_head[key]) / (transition / 1000) > speed
-                                         for key in ('yaw_deg', 'pitch_deg')):
-                    raise DeviceError('OUT_OF_RANGE')
+                if previous_head is not None:
+                    distance = max(abs(setting[key] - previous_head[key]) for key in ('yaw_deg', 'pitch_deg'))
+                    minimum = math.ceil(distance / speed * 1000)
+                    if transition < minimum:
+                        raise range_error('speed', frame_index=frame_index, distance_deg=distance,
+                                          move_ms=transition, minimum_move_ms=minimum,
+                                          recommended_move_ms=minimum + 250,
+                                          limits={'max_speed_deg_s': speed, 'max_move_ms': 4000,
+                                                  'max_duration_ms': min(capabilities.get('max_duration_ms', 8000), 8000)})
                 previous_head = setting
-                # First transition is validated against actual pose by firmware.
+                # Firmware remains authoritative if the measured pose changes after preflight.
             elif channel == 'screen':
                 pages, expressions = capability.get('pages'), capability.get('expressions')
                 if not isinstance(pages, list) or setting['page'] not in pages:
@@ -212,6 +254,10 @@ class Connection:
                     record['error_code'] = code
                 elif state in ('failed', 'rejected'):
                     record['error_code'] = 'HARDWARE_ERROR'
+            control = self.hub.control
+            if (record.get('has_head') and record.get('error_code') in MOTION_FAULTS
+                    and control and control.id == record['control_session_id']):
+                control.motion_fault = record['error_code']
             if self.hub.config.stackchan_audit_enabled:
                 LOGGER.warning('s2s_action_audit %s', json.dumps({'stage': 'device_command_status',
                     'command_id': command_id, 'status': state, 'simulated': record.get('simulated'),
@@ -228,6 +274,7 @@ class Control:
         self.id, self.generation = secrets.token_hex(16), 1
         self.connection_id, self.synced = None, False
         self.closed = False
+        self.motion_fault = None
         self.keepalive = None
 
     @property
@@ -341,7 +388,7 @@ class Control:
         if name == 'stackchan_perform' and self.hub.config.stackchan_audit_enabled:
             LOGGER.warning('s2s_action_audit %s', json.dumps({'stage': 'perform_result',
                 'summary': action_summary(arguments), **{key: result[key] for key in (
-                    'command_id', 'status', 'error_code', 'fresh', 'simulated') if key in result}},
+                    'command_id', 'status', 'error_code', 'details', 'fresh', 'simulated') if key in result}},
                 ensure_ascii=False, allow_nan=False))
         return result
 
@@ -352,8 +399,9 @@ class Control:
             validator = PARAMETERS.get(name)
             if validator is None:
                 raise DeviceError('UNKNOWN_TOOL')
-            if not validator.is_valid(arguments):
-                raise DeviceError('INVALID_ARGUMENT')
+            errors = list(validator.iter_errors(arguments))
+            if errors:
+                raise schema_error(errors) if name == 'stackchan_perform' else DeviceError('INVALID_ARGUMENT')
             encode(arguments)
             if name == 'stackchan_get_state':
                 observed = await self.query()
@@ -364,6 +412,7 @@ class Control:
                         'device_boot_id': connection.boot_id if connection else None,
                         'capabilities': connection.capabilities if online else {},
                         'state': observed.get('state', {}) if observed else {},
+                        'head_motion_fault': self.motion_fault,
                         'active_command_id': observed.get('active_command_id') if observed else None}
             if name == 'stackchan_get_command':
                 record = self.hub.records.get(arguments['command_id'])
@@ -386,6 +435,8 @@ class Control:
                         code = observed.get('error_code')
                         if isinstance(code, str) and code in self.hub.error_codes:
                             result['error_code'] = code
+                        if record.get('has_head') and result.get('error_code') in MOTION_FAULTS:
+                            self.motion_fault = result['error_code']
                 return result
             if name == 'stackchan_stop':
                 connection = self.hub.connection
@@ -397,6 +448,11 @@ class Control:
                 return result
             if self.hub.config.stackchan_read_only:
                 raise DeviceError('NOT_READY')
+            has_head = any('head' in frame for frame in arguments['frames'])
+            if has_head and self.motion_fault:
+                raise DeviceError('NOT_READY', details={'reason': 'head_motion_fault_latched',
+                                                       'previous_error_code': self.motion_fault,
+                                                       'recovery': 'end_call_and_confirm_device_before_new_call'})
             target_limit = self.hub.config.stackchan_test_max_deg
             if target_limit is not None and any(
                     abs(item['head'][axis]) > target_limit
@@ -404,8 +460,19 @@ class Control:
                     for axis in ('yaw_deg', 'pitch_deg')):
                 raise DeviceError('OUT_OF_RANGE')
             connection = await self.ensure()
+            generation = self.generation
             validate_frames(arguments, connection.capabilities)
-            command_id, generation = secrets.token_hex(16), self.generation
+            if has_head:
+                observed = await self.query()
+                if self.hub.connection is not connection or self.generation != generation or not self.synced:
+                    raise DeviceError('STALE_CONTEXT')
+                pose = observed.get('state') if observed else None
+                if not isinstance(pose, dict) or not all(number(pose.get(key)) for key in ('yaw_deg', 'pitch_deg')):
+                    raise DeviceError('NOT_READY', details={'reason': 'fresh_pose_unavailable'})
+                if observed.get('active_command_id'):
+                    raise DeviceError('BUSY')
+                validate_frames(arguments, connection.capabilities, initial_pose=pose)
+            command_id = secrets.token_hex(16)
             message = self.envelope('command.execute', connection, command_id=command_id, args=arguments)
             if not COMMAND.is_valid(message):
                 raise DeviceError('INVALID_ARGUMENT')
@@ -414,14 +481,18 @@ class Control:
             future = asyncio.get_running_loop().create_future()
             record = {**{key: message[key] for key in ('command_id', 'connection_id', 'control_session_id', 'generation')},
                       'owner': self.owner, 'status': 'unknown', 'fresh': False, 'partial_applied': False,
-                      'observed_at': time.monotonic(), 'ack': future, 'simulated': self.simulated}
+                      'observed_at': time.monotonic(), 'ack': future, 'simulated': self.simulated,
+                      'has_head': has_head}
             if self.hub.config.stackchan_audit_enabled:
                 record['action_summary'] = action_summary(arguments)
             self.hub.records[command_id] = record
             try:
-                await connection.send(message, guard=lambda: self.authorized and self.synced and self.generation == generation)
+                await connection.send(message, guard=lambda: self.authorized and self.synced
+                                      and self.generation == generation and not (has_head and self.motion_fault))
                 return await asyncio.wait_for(future, self.hub.config.device_ack_seconds)
             except TimeoutError:
+                if has_head:
+                    self.motion_fault = 'ACK_TIMEOUT'
                 raise DeviceError('ACK_TIMEOUT', command_id) from None
             finally:
                 record.pop('ack', None)

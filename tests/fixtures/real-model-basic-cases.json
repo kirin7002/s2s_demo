@@ -1,0 +1,76 @@
+{
+  "purpose": "Real model chooses tool calls from spoken intent; no injected function calls or prerecorded actuator frames.",
+  "input_mode": "Explicitly labelled synthetic speech for repeatability; does not prove user microphone capture.",
+  "execution_rules": [
+    "Use one real connected physical device and normal advertised capabilities.",
+    "Wait for each command terminal receipt before proceeding; accepted is not success.",
+    "Do not retry a failed physical action automatically; inspect it and preserve the result.",
+    "Return only a short spoken conclusion; show technical diagnostics as text.",
+    "Check no user call or controller is active before starting.",
+    "Record device simulated=false, command outcomes, ordered numeric frame summaries and response audio duration.",
+    "Cleanup stops remaining motion, restores neutral face and lights off, and releases control."
+  ],
+  "cases": [
+    {
+      "id": "nod",
+      "utterance": "请点一次头，最后恢复正视。做完简单告诉我。",
+      "expected": {
+        "head_axis": "pitch",
+        "returns_to_center": true
+      }
+    },
+    {
+      "id": "shake",
+      "utterance": "请摇一次头，最后恢复正视。做完简单告诉我。",
+      "expected": {
+        "head_axis": "yaw",
+        "returns_to_center": true
+      }
+    },
+    {
+      "id": "smile",
+      "utterance": "请露出微笑。",
+      "expected": {
+        "expression": "happy"
+      }
+    },
+    {
+      "id": "laugh",
+      "utterance": "请做一个大笑的表情。",
+      "expected": {
+        "expression": "laughing"
+      }
+    },
+    {
+      "id": "scared",
+      "utterance": "请做一个害怕的表情。",
+      "expected": {
+        "expression": "scared"
+      }
+    },
+    {
+      "id": "lights",
+      "utterance": "请把灯依次变成红色、绿色、蓝色，每种停留半秒，最后熄灯。",
+      "expected": {
+        "light_colors": [
+          "red",
+          "green",
+          "blue"
+        ],
+        "ends_light_off": true
+      }
+    },
+    {
+      "id": "combined",
+      "utterance": "请一边微笑一边点一次头，同时亮绿灯，结束后恢复正视、中性表情并熄灯。",
+      "expected": {
+        "head_axis": "pitch",
+        "expression": "happy",
+        "light_color": "green",
+        "returns_to_center": true,
+        "ends_expression": "neutral",
+        "ends_light_off": true
+      }
+    }
+  ]
+}

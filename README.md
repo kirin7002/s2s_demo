@@ -41,7 +41,7 @@ Mac 已准备项目的启动命令与本次验证结果见 [Mac 本地启动](do
 | `S2S_STACKCHAN_ENABLED` | 默认 `0`；设为 `1` 且下两项有效才开放设备路由 |
 | `S2S_STACKCHAN_DEVICE_ID` | 单个演示设备的固定ID；1–64个字母、数字、下划线或短横线 |
 | `S2S_STACKCHAN_DEVICE_TOKEN` | 独立设备Bearer凭据，32–256个字母、数字、下划线或短横线；只在服务端/设备端安全配置 |
-| `S2S_STACKCHAN_TEST_MAX_DEG` | 可选联测绝对目标角度上限；当前真实联调使用3，仍受设备自身限位和速度限制 |
+| `S2S_STACKCHAN_TEST_MAX_DEG` | 可选联测绝对目标角度上限；正常使用不设置，仍受设备自身限位和速度限制 |
 | `S2S_STACKCHAN_AUDIT` | 默认0；1只记录动作参数摘要、枚举表情及结果，不记录语音或屏幕文本 |
 
 默认完整地址（无需 Workspace ID）：

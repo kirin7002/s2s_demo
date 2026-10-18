@@ -14,7 +14,7 @@
     },
     {
       "name": "stackchan_perform",
-      "description": "Execute a bounded sequence of head poses, light settings and screen frames chosen by the agent. Returns accepted only after device acknowledgement; accepted does not mean completed. Query stackchan_get_command for completion. Device selection and authorization are supplied by the gateway session.",
+      "description": "Execute a bounded sequence of head poses, light settings and screen frames chosen by the agent. Returns accepted only after device acknowledgement; accepted does not mean completed. Query stackchan_get_command for completion. Device selection and authorization are supplied by the gateway session. Before planning head motion, read fresh state and capabilities. For each head frame, compute distance=max(abs(target_yaw-previous_yaw),abs(target_pitch-previous_pitch)); the first frame starts at the measured pose, later frames at the previous head target. move_ms must be at least ceil(1000*distance/head.max_speed_deg_s); allow an additional 250 ms settling margin rather than using the speed boundary. For example, -20 to +20 degrees at 30 deg/s needs at least 1334 ms, preferably 1584 ms or longer, not 500 ms. Recompute subsequent at_ms and duration_ms when changing move_ms. Keep all timing and frame limits; reduce repetitions or amplitude if needed. OUT_OF_RANGE can mean excessive speed as well as position or sequence limits; inspect error details, never infer locking or calibration faults. Do not blindly retry rejected or timed-out motion.",
       "inputSchema": {
         "type": "object",
         "properties": {

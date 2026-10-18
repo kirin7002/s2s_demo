@@ -53,7 +53,7 @@ function transcript(role, text) {
   if (role === 'assistant' && assistant) target = assistant;
   else {
     const row = document.createElement('div'); row.className = `utterance ${role}`;
-    const label = document.createElement('small'); label.textContent = role === 'user' ? '你' : '助手';
+    const label = document.createElement('small'); label.textContent = role === 'user' ? '你' : role === 'diagnostic' ? '诊断' : '助手';
     target = document.createElement('span'); row.append(label, target); el('transcripts').append(row);
     if (role === 'assistant') assistant = target;
     while (el('transcripts').children.length > 100) el('transcripts').firstElementChild.remove();
@@ -65,7 +65,15 @@ function play(s, bytes) {
   if (!bytes.byteLength || bytes.byteLength % 2 || s.context.state !== 'running') throw new Error('音频播放不可用，请重新连接。');
   const duration = bytes.byteLength / 48000;
   const at = Math.max(s.context.currentTime + .02, s.nextTime);
-  if (at + duration - s.context.currentTime > 8) throw new Error('播放积压过多，请重新连接。');
+  if (at + duration - s.context.currentTime > 8) {
+    // Bound queued PCM without ending the microphone/session. This reply is
+    // explicitly interrupted, never presented as a complete spoken response.
+    flush(s); s.suppressed = true;
+    s.socket.send(JSON.stringify({ type: 'interrupt' }));
+    transcript('diagnostic', '播放积压，本次回复已打断，通话继续。');
+    status('回复已打断，继续聆听', '播放积压，本次回复未播完；可以继续说话。', 'listening');
+    return;
+  }
   const data = new DataView(bytes), buffer = s.context.createBuffer(1, bytes.byteLength / 2, 24000);
   const floats = buffer.getChannelData(0);
   for (let i = 0; i < floats.length; i++) floats[i] = data.getInt16(i * 2, true) / 32768;
@@ -131,6 +139,8 @@ async function start() {
           case 'listening': status('正在聆听', '我在听，请继续。', 'listening'); break;
           case 'turn_done': assistant = null; status('继续聆听', '可以继续说话。', 'listening'); break;
           case 'transcript': transcript(message.role, message.text); break;
+          case 'tool_diagnostic':
+            transcript('diagnostic', `${message.tool}：${message.error_code || '执行未确认'}${message.details ? ' ' + JSON.stringify(message.details) : ''}`); break;
           case 'notice': el('detail').textContent = message.message; break;
           case 'error': finish(s, '会话错误', message.message); break;
         }

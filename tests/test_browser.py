@@ -221,9 +221,31 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.listening()
         await self.h.upstreams[0].send_json({"type": "response.created"})
         await self.h.upstreams[0].send_json({"type": "response.audio.delta", "delta": base64.b64encode(b"\x00\x00" * 24000 * 9).decode()})
-        await self.page.wait_for_function("() => document.getElementById('detail').textContent.includes('播放积压')")
-        await self.released()
+        await self.page.wait_for_function("() => document.getElementById('transcripts').textContent.includes('本次回复已打断')")
+        self.assertTrue(await self.page.locator('#start').is_disabled())
+        self.assertEqual(await self.page.evaluate("window.__streams[0].getTracks()[0].readyState"), 'live')
         self.assertEqual(await self.page.evaluate("window.__sources.length"), 0)
+        # Suppress residual audio, then play the next response on the same WS.
+        await self.h.upstreams[0].send_json({'type': 'response.created'})
+        await self.h.upstreams[0].send_json({'type': 'response.audio.delta', 'delta': base64.b64encode(bytes(4800)).decode()})
+        await self.page.wait_for_function('() => window.__sources.length === 1')
+        self.assertEqual(await self.page.evaluate('window.__sockets.length'), 1)
+        await self.page.click('#stop')
+        await self.released()
+
+    async def test_tool_diagnostic_is_text_only_and_keeps_call_alive(self):
+        self.h.mode = 'normal'
+        await self.page.click('#start')
+        await self.listening()
+        await self.page.evaluate("""() => window.__sockets[0].onmessage({data: JSON.stringify({
+            type:'tool_diagnostic', tool:'stackchan_perform', error_code:'OUT_OF_RANGE',
+            details:{reason:'speed', frame_index:1, minimum_move_ms:1334}
+        })})""")
+        self.assertIn('1334', await self.page.locator('#transcripts').inner_text())
+        self.assertEqual(await self.page.evaluate('window.__sources.length'), 0)
+        self.assertTrue(await self.page.locator('#start').is_disabled())
+        await self.page.click('#stop')
+        await self.released()
 
     async def test_interrupt_stops_and_disconnects_queued_audio(self):
         import base64

@@ -11,6 +11,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -29,6 +30,18 @@ from gateway.server import ACTIVE, ATTEMPTS, CLIENT, DEVICES, LOGINS, OWNERS, cr
 from scripts.stackchan_hardware import private_json, private_write
 
 DEFAULT_DIRECTORY = ROOT / '.run/s2s-live'
+
+
+class ActionAuditHandler(logging.Handler):
+    """Persist only the gateway's fixed, text-free action audit payload."""
+    def __init__(self, runtime):
+        super().__init__(logging.WARNING)
+        self.runtime = runtime
+
+    def emit(self, record):
+        message = record.getMessage()
+        if message.startswith('s2s_action_audit '):
+            self.runtime.record(**json.loads(message[len('s2s_action_audit '):]))
 
 
 @web.middleware
@@ -83,7 +96,7 @@ class TrackedProvider:
             item = event['item']
             value = json.loads(item['output'])
             self.outputs.append({'call_id': item['call_id'], **{key: value[key] for key in (
-                'ok', 'status', 'command_id', 'error_code', 'online', 'fresh', 'age_ms', 'simulated', 'state'
+                'ok', 'status', 'command_id', 'error_code', 'details', 'online', 'fresh', 'age_ms', 'simulated', 'state'
             ) if key in value}})
         await self.socket.send_json(event)
 
@@ -151,6 +164,7 @@ class Runtime:
             'simulated': connection.capabilities.get('simulated') if connection else None,
             'capabilities': connection.capabilities if connection else {},
             'active_sessions': len(self.app[ACTIVE]), 'control_session_active': self.hub.control is not None,
+            'head_motion_fault': self.hub.control.motion_fault if self.hub.control else None,
             'read_only': self.config.stackchan_read_only, 'max_head_target_deg': self.config.stackchan_test_max_deg,
             'max_sessions': self.config.max_sessions, 'max_seconds': self.config.max_seconds,
             'idle_seconds': self.config.idle_seconds,
@@ -209,6 +223,8 @@ class Runtime:
         await local_runner.setup()
         control = None
         task = None
+        audit_handler = ActionAuditHandler(self)
+        logging.getLogger('gateway.stackchan').addHandler(audit_handler)
         try:
             await web.TCPSite(runner, '0.0.0.0', self.hardware['port'], ssl_context=tls).start()
             await web.TCPSite(local_runner, '127.0.0.1', 8080).start()
@@ -230,6 +246,7 @@ class Runtime:
                 self.control_socket.unlink(missing_ok=True)
             await local_runner.cleanup()
             await runner.cleanup()
+            logging.getLogger('gateway.stackchan').removeHandler(audit_handler)
             private_json(self.directory / 'state.json', {**self.status(), 'stopped': True})
             self.record('gateway_stopped')
 

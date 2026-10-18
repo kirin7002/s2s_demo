@@ -132,7 +132,13 @@ class Session:
         self.audio_bytes = 0
         self.stage = "connect"
         self.tools = ToolCalls(device_control, self.upstream_send,
-                               lambda message: self.emit('notice', message=message)) if device_control else None
+                               lambda message: self.emit('notice', message=message),
+                               self.tool_diagnostic) if device_control else None
+
+    async def tool_diagnostic(self, name, result, call_id):
+        # A browser-only event: never appended as speech or sent to TTS.
+        await self.emit('tool_diagnostic', tool=name, call_id=call_id, **{key: result[key] for key in
+                        ('error_code', 'details', 'command_id', 'status') if key in result})
 
     async def emit(self, kind, **fields):
         await asyncio.wait_for(self.browser.send_json({"type": kind, **fields}), 5)

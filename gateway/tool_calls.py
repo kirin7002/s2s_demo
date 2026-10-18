@@ -19,8 +19,9 @@ class Response:
 
 
 class ToolCalls:
-    def __init__(self, control, send, notice):
+    def __init__(self, control, send, notice, diagnostic=None):
         self.control, self.send, self.notice = control, send, notice
+        self.diagnostic = diagnostic
         self.epoch = 0
         self.responses, self.calls = {}, {}
         self.active_response = None
@@ -152,6 +153,8 @@ class ToolCalls:
                     if not self.valid(response):
                         call['state'] = 'cancelled'
                         return
+                    if self.diagnostic and (result.get('ok') is False or result.get('error_code')):
+                        await self.diagnostic(call['name'], result, call['call_id'])
                     await self.send({'type': 'conversation.item.create', 'item': {
                         'type': 'function_call_output', 'call_id': call['call_id'],
                         'output': json.dumps(result, ensure_ascii=False, separators=(',', ':'), allow_nan=False)}})
