@@ -1,0 +1,41 @@
+{
+    admin off
+    auto_https disable_redirects
+    skip_install_trust
+    default_sni 47.116.102.49
+    servers {
+        protocols h1
+    }
+    pki {
+        ca s2s-device-ip {
+            name "S2S Device IP CA"
+            root {
+                cert /ca/root.crt
+                key /ca/root.key
+            }
+        }
+    }
+}
+
+https://47.116.102.49:8443 {
+    tls {
+        issuer internal {
+            ca s2s-device-ip
+        }
+    }
+    @device {
+        method GET
+        path /device/v1/ws
+    }
+    handle @device {
+        reverse_proxy https://caddy:443 {
+            header_up Host s2s.kirinxu.cn
+            transport http {
+                tls_server_name s2s.kirinxu.cn
+            }
+        }
+    }
+    handle {
+        respond 404
+    }
+}
