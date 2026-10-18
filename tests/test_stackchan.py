@@ -196,6 +196,9 @@ class ContractTests(unittest.TestCase):
             self.assertIn(text, tools['instructions'])
         self.assertNotIn('仅表情或灯光不得添加head', tools['instructions'])
         self.assertNotIn('未要求改变的输出不要擅自改动', tools['instructions'])
+        for text in ('普通对话中的自主非语言表达', '不每句必动', '保持不动时优先不动',
+                     '语音仍简短直接回答原问题', '表达后返回该朝向，不能擅自回正'):
+            self.assertIn(text, tools['instructions'])
         perform = next(t for t in QWEN_TOOLS if t['function']['name'] == 'stackchan_perform')
         self.assertIn('timing_mode defaults to auto', perform['function']['description'])
         self.assertNotIn(TOKEN, repr(config) + json.dumps(tools))
