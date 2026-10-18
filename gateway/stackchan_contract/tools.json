@@ -39,17 +39,20 @@
                     "yaw_deg": {
                       "type": "number",
                       "minimum": -60,
-                      "maximum": 60
+                      "maximum": 60,
+                      "description": "Absolute target yaw in calibrated coordinates. A shake needs distinct left and right yaw targets, then return to 0; do not copy the measured current pose into every frame."
                     },
                     "pitch_deg": {
                       "type": "number",
                       "minimum": -25,
-                      "maximum": 25
+                      "maximum": 25,
+                      "description": "Absolute target pitch in calibrated coordinates. A nod needs a visibly changed pitch target and a return to 0. Current measured pose is the starting point for timing, not all future targets."
                     },
                     "move_ms": {
                       "type": "integer",
                       "minimum": 100,
-                      "maximum": 4000
+                      "maximum": 4000,
+                      "description": "Movement budget INCLUDING physical settling, not the pause before a frame. Unless the user requests a particular pace, use 1000-1500 ms for each small nod/shake movement. Do not default to the schema minimum 100 ms. For nonzero travel allow at least ceil(1000*max(abs(delta_yaw),abs(delta_pitch))/advertised_max_speed_deg_s)+250 ms. Recompute later at_ms and duration_ms when changing this budget."
                     }
                   },
                   "required": [

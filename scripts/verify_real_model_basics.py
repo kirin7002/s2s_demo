@@ -5,6 +5,7 @@ functions, preset action frames, physical retries or firmware changes.
 """
 import argparse
 import asyncio
+import copy
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -48,6 +49,50 @@ def color(frame):
 
 def prior_diagnostic(event, prior_commands):
     return bool(event.get('command_id') in prior_commands)
+
+
+def one_parameter_correction(errors):
+    """One explicit preflight correction; never retry an accepted physical fault."""
+    return len(errors) == 1 and errors[0].get('error_code') == 'OUT_OF_RANGE' and (
+        errors[0].get('details', {}).get('reason') in {'speed', 'target', 'duration', 'frame_count', 'move_duration'})
+
+
+async def run_isolated(args, cases):
+    """One authenticated voice/provider connection per intent, fully closed first."""
+    output = args.directory / args.report_name
+    report = {'started_utc': datetime.now(timezone.utc).isoformat(),
+              'input_source': 'macOS_synthetic_Chinese_not_user_microphone',
+              'function_call_injection': False, 'isolated_provider_session_per_case': True,
+              'real_provider_connections_planned': len(cases), 'cases': [], 'provider_audit': [], 'passed': False}
+    private_json(output, report)
+    head_failed = False
+    for case in cases:
+        if head_failed and 'head_axis' in case['expected']:
+            report['cases'].append({'id': case['id'], 'passed': False,
+                                   'not_executed': 'Earlier physical head failure; no retry'})
+            continue
+        child = copy.copy(args)
+        child.case_ids = [case['id']]
+        child.report_name = Path(args.report_name).stem + '-' + case['id'] + '.json'
+        result = await run(child)
+        report['cases'].extend([{**item, 'isolated_report': child.report_name} for item in result['cases']])
+        report['provider_audit'].extend(result.get('provider_audit', []))
+        report['final_status'] = result.get('final_status')
+        report['final_device_state'] = result.get('final_device_state')
+        report['control_released'] = result.get('control_released')
+        outputs = [o for p in result.get('provider_audit', []) for o in p.get('outputs', [])]
+        evidence = [e for item in result['cases'] for e in item.get('failure_evidence', [])]
+        head_failed = any(e.get('error_code') in {'MOTION_TIMEOUT', 'SCHEDULER_OVERRUN',
+                          'HARDWARE_ERROR', 'ACK_TIMEOUT', 'DEVICE_OFFLINE'} for e in outputs + evidence)
+        report['real_provider_connections_actual'] = len(report['provider_audit'])
+        private_json(output, report)
+        if not result.get('control_released') or result.get('failure'):
+            report['failure'] = result.get('failure', 'Control release unconfirmed')
+            break
+    report['passed'] = len(report['cases']) == len(cases) and all(c.get('passed') for c in report['cases'])
+    report['finished_utc'] = datetime.now(timezone.utc).isoformat()
+    private_json(output, report)
+    return report
 
 
 def assess(expected, summaries, pose):
@@ -109,6 +154,8 @@ async def run(args):
         cases = [case for case in cases if case['id'] in args.case_ids]
     if not 1 <= len(cases) <= 7:
         raise ValueError('Suite must have 1..7 cases')
+    if len(cases) > 1:
+        return await run_isolated(args, cases)
     audio_dir = directory / 'basic-synthetic-audio'
     audio_dir.mkdir(mode=0o700, exist_ok=True)
     pcm_cases = []
@@ -228,7 +275,9 @@ async def run(args):
                             audits = events_since(audit_path, offset)
                             errors = [e for e in audits if e.get('error_code') or
                                       (e.get('stage') == 'device_command_status' and e.get('status') in ('failed', 'rejected'))]
-                            if errors or result['diagnostics']:
+                            if errors and one_parameter_correction(errors):
+                                result['parameter_corrections'] = errors
+                            elif errors or result['diagnostics']:
                                 result['failure_evidence'] = errors or result['diagnostics']
                                 raise ToolFailure('Tool failure; no automatic retry')
                             if pump.done() and last_done and time.monotonic() - last_message >= 1:
@@ -242,47 +291,21 @@ async def run(args):
                         pump.cancel()
                         await asyncio.gather(pump, return_exceptions=True)
                         pump = None
-                    await socket.send_json({'type': 'interrupt'})
-                    # Existing generation fence stops motion and clears pending frames.
-                    # Confirm fresh inactivity before considering independent face/light cases.
-                    async with asyncio.timeout(5):
+                    # Each case owns its own provider socket. Close it on failure;
+                    # no late continuation can be mistaken for the next intent.
+                    await socket.close()
+                    async with asyncio.timeout(8):
                         while True:
-                            await asyncio.sleep(.1)
                             stopped = await rpc('get_state')
-                            if stopped.get('fresh') and not stopped.get('active_command_id'):
+                            now = await rpc('status')
+                            if (stopped.get('fresh') and not stopped.get('active_command_id')
+                                    and not now['active_sessions'] and not now['control_session_active']):
                                 break
+                            await asyncio.sleep(.1)
                     result['stopped_after_failure'] = stopped
-                    head_failed = head_failed or any(e.get('error_code') in
+                    head_failed = any(e.get('error_code') in
                         {'MOTION_TIMEOUT', 'HARDWARE_ERROR', 'SCHEDULER_OVERRUN'}
                         for e in result.get('failure_evidence', []))
-                    # Drain delayed receipts/short acknowledgement from the failed
-                    # turn before sending a new spoken intent. Do not attribute
-                    # the previous command's error to the next independent case.
-                    try:
-                        async with asyncio.timeout(5):
-                            while True:
-                                try:
-                                    late = await socket.receive(timeout=1)
-                                except TimeoutError:
-                                    break
-                                if late.type == WSMsgType.BINARY:
-                                    result['audio_output_bytes'] += len(late.data)
-                                elif late.type == WSMsgType.TEXT:
-                                    event = json.loads(late.data)
-                                    if event['type'] == 'tool_diagnostic':
-                                        result['diagnostics'].append(event)
-                                    elif event['type'] == 'transcript' and event['role'] == 'assistant':
-                                        text += event['text']
-                                    elif event['type'] == 'turn_done' and text:
-                                        result['responses'].append({'text': text, 'characters': len(text)})
-                                        text = ''
-                                else:
-                                    raise RuntimeError('Voice connection ended during failure drain')
-                    except TimeoutError:
-                        result['failure_drain_timeout'] = True
-                    stopped = await rpc('get_state')
-                    if not stopped.get('fresh') or stopped.get('active_command_id'):
-                        raise RuntimeError('Stop not confirmed after failure; end suite')
                 audits = events_since(audit_path, offset)
                 performed = [e for e in audits if e.get('stage') == 'perform_result' and e.get('command_id')]
                 terminals = {e['command_id']: e for e in audits if e.get('stage') == 'device_command_status'

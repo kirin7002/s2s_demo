@@ -162,6 +162,8 @@ class ContractTests(unittest.TestCase):
                 self.assertEqual(base[key], tools[key])
         self.assertEqual(len(tools['tools']), 4)
         self.assertIn('模拟', tools['instructions'])
+        self.assertIn('move_ms默认1000–1500ms', tools['instructions'])
+        self.assertLess(tools['instructions'].index('【头部默认节奏】'), tools['instructions'].index('ceil('))
         for text in ('ceil(distance/max_speed_deg_s*1000)', '1584ms', 'details.reason', '20个中文字符', '不可猜测锁定'):
             self.assertIn(text, tools['instructions'])
         perform = next(t for t in tools['tools'] if t['function']['name'] == 'stackchan_perform')
