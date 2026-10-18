@@ -72,7 +72,8 @@ def preflight(release):
     image = caddy['Image']
     if not re.fullmatch(r'sha256:[0-9a-f]{64}', image):
         raise EntryError('Expected immutable existing Caddy image ID')
-    version = docker('run', '--rm', '--pull=never', '--network', 'none', image, 'version').decode()
+    version = docker('run', '--rm', '--pull=never', '--network', 'none',
+                     '--entrypoint', '/usr/bin/caddy', image, 'version').decode()
     match = re.search(r'v\d+\.\d+\.\d+', version)
     if not match:
         raise EntryError('Caddy version unavailable')
@@ -114,7 +115,8 @@ def preflight(release):
     # Validate against the exact installed image without touching main Caddy.
     uid, gid = (ca / 'root.key').stat().st_uid, (ca / 'root.key').stat().st_gid
     print('checking_isolated_caddy_configuration=true', flush=True)
-    docker('run', '--rm', '--pull=never', '--network', 'none', '--user', str(uid) + ':' + str(gid),
+    docker('run', '--rm', '--pull=never', '--network', 'none', '--entrypoint', '/usr/bin/caddy',
+           '--user', str(uid) + ':' + str(gid),
            '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true', '--read-only',
            '--tmpfs', '/data:rw,noexec,nosuid,size=16m,uid=' + str(uid) + ',gid=' + str(gid) + ',mode=0700',
            '--tmpfs', '/config:rw,noexec,nosuid,size=4m,uid=' + str(uid) + ',gid=' + str(gid) + ',mode=0700',
@@ -128,7 +130,8 @@ def preflight(release):
 
 
 def launch_args(release, plan):
-    args = ['run', '-d', '--pull=never', '--name', NAME, '--label', 'com.kirin.project=' + PROJECT,
+    args = ['run', '-d', '--pull=never', '--entrypoint', '/usr/bin/caddy',
+            '--name', NAME, '--label', 'com.kirin.project=' + PROJECT,
             '--label', 'com.kirin.ip_entry_revision=' + plan['revision'],
             '--network', plan['network'], '--publish', '0.0.0.0:8443:8443/tcp',
             '--restart', 'unless-stopped', '--user', '0:0', '--read-only', '--cap-drop', 'ALL',

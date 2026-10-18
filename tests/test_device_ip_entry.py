@@ -29,6 +29,7 @@ class EntryTests(unittest.TestCase):
                 'token': 'synthetic-secret'}
         args = entry.launch_args(Path('/release'), plan)
         self.assertIn(plan['image'], args)
+        self.assertEqual(args[args.index('--entrypoint') + 1], '/usr/bin/caddy')
         self.assertIn('0.0.0.0:8443:8443/tcp', args)
         self.assertIn('caddy_default', args)
         self.assertIn('--read-only', args)
