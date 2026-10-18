@@ -8,10 +8,14 @@ import subprocess
 import sys
 import tempfile
 
+sys.dont_write_bytecode = True
+
 if __package__:
     from .update_ui import UpdateError, docker, inspect, launch_args
+    from .gateway_checks import OFFLINE_CHECK, health_check_code
 else:
     from update_ui import UpdateError, docker, inspect, launch_args
+    from gateway_checks import OFFLINE_CHECK, health_check_code
 
 
 def verified_manifest(release):
@@ -22,12 +26,12 @@ def verified_manifest(release):
     for name, digest in manifest['files'].items():
         path = Path(name)
         if path.is_absolute() or '..' in path.parts or path.parts[0] not in {
-                'gateway', 'web', 'wheelhouse', 'requirements.txt', 'public-isrg-root-x1.pem'}:
+                'gateway', 'web', 'wheelhouse', 'deploy', 'requirements.txt', 'public-isrg-root-x1.pem'}:
             raise UpdateError('Unexpected release file')
         target = release / path
         if target.is_symlink() or not target.is_file() or hashlib.sha256(target.read_bytes()).hexdigest() != digest:
             raise UpdateError('Release hash mismatch')
-    for folder in ('gateway', 'web', 'wheelhouse'):
+    for folder in ('gateway', 'web', 'wheelhouse', 'deploy'):
         actual = {str(p.relative_to(release)) for p in (release / folder).rglob('*') if p.is_file()}
         expected = {n for n in manifest['files'] if Path(n).parts[0] == folder}
         if actual != expected:
@@ -160,23 +164,8 @@ USER app
         docker('build', '--network', 'none', '--pull=false', '-t', image, str(context))
     # Verify imports before stopping anything. No external connection is made.
     docker('run', '--rm', '--network', 'none', '--entrypoint', 'python', image, '-c',
-           'from gateway.server import create_app; from gateway.stackchan import QWEN_TOOLS; assert len(QWEN_TOOLS)==4')
-    health_code = '''import json,time,urllib.request,urllib.error
-from gateway.config import Config
-c=Config.from_env();assert c.stackchan_configured and c.stackchan_test_max_deg is None
-opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
-for attempt in range(30):
- try:
-  assert opener.open('http://127.0.0.1:8080/login',timeout=2).status==200
-  meta=json.load(opener.open('http://127.0.0.1:8080/api/config',timeout=2))
-  assert meta['ready'] and meta['password_required'] and meta['model']=='qwen-audio-3.0-realtime-flash'
-  try:opener.open('http://127.0.0.1:8080/api/stackchan',timeout=2);raise AssertionError()
-  except urllib.error.HTTPError as error:assert error.code==401
-  break
- except Exception:
-  if attempt==29:raise SystemExit('Gateway health failed; details withheld') from None
-  time.sleep(.2)
-'''
+           OFFLINE_CHECK)
+    health_code = health_check_code(json.loads((release / 'gateway-manifest.json').read_text()))
     backup = switch_gateway(old, image, revision, caddy['Id'], values,
         lambda: docker('exec', 's2s-demo', 'python', '-c', health_code))
     print('DEPLOYED_GATEWAY_REVISION=' + revision)
