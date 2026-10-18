@@ -26,7 +26,7 @@ class EntryTests(unittest.TestCase):
 
     def test_launch_reuses_exact_image_and_has_no_gateway_credentials(self):
         plan = {'revision': 'a' * 40, 'image': 'sha256:' + 'b' * 64, 'network': 'caddy_default',
-                'token': 'synthetic-secret'}
+                'token': 'synthetic-secret', 'upstream_ip': '172.18.0.2', 'upstream_resolution': 'docker_dns'}
         args = entry.launch_args(Path('/release'), plan)
         self.assertIn(plan['image'], args)
         self.assertEqual(args[args.index('--entrypoint') + 1], '/usr/bin/caddy')
@@ -40,6 +40,7 @@ class EntryTests(unittest.TestCase):
         self.assertNotIn('DASHSCOPE', repr(args))
         self.assertNotIn('/opt/caddy', repr(args))
         self.assertNotIn('80:80', repr(args))
+        self.assertNotIn('--add-host', args)
 
     def test_failed_health_removes_only_new_entry_and_restores_prior(self):
         calls = []
@@ -105,6 +106,82 @@ class EntryTests(unittest.TestCase):
             (root / 'device-ip.Caddyfile').write_text('changed')
             with self.assertRaises(entry.EntryError):
                 entry.verify_bundle(root)
+
+
+class NetworkSelectionTests(unittest.TestCase):
+    def caddy(self, names, project='caddy'):
+        return {'Config': {'Labels': {'com.docker.compose.project': project} if project else {}},
+                'NetworkSettings': {'Networks': {
+                    name: {'IPAddress': ip, 'NetworkID': name + '-id'} for name, ip in names}}}
+
+    def network(self, name, owner=None, compose_name=None):
+        return {'Id': name + '-id', 'Driver': 'bridge', 'Options': None,
+                'Labels': {'com.docker.compose.project': owner,
+                           'com.docker.compose.network': compose_name} if owner else {}}
+
+    def test_compose_default_selected_among_two_bridges_not_external_ai_gateway(self):
+        caddy = self.caddy([('ai-gateway', '172.19.0.2'), ('caddy_default', '172.18.0.2')])
+        networks = {'ai-gateway': self.network('ai-gateway', 'ai-gateway', 'default'),
+                    'caddy_default': self.network('caddy_default', 'caddy', 'default')}
+        result = entry.select_network(caddy, networks.__getitem__)
+        self.assertEqual(result['network'], 'caddy_default')
+        self.assertEqual(result['selection_reason'], 'compose_project_default')
+        self.assertEqual(result['upstream_resolution'], 'docker_dns')
+        self.assertEqual(result['upstream_ip'], '172.18.0.2')
+
+    def test_multiple_owned_network_selection_is_deterministic(self):
+        networks = {n: self.network(n, 'caddy', n) for n in ['z-backend', 'a-frontend']}
+        for names in [[('z-backend', '172.19.0.2'), ('a-frontend', '172.18.0.2')],
+                      [('a-frontend', '172.18.0.2'), ('z-backend', '172.19.0.2')]]:
+            self.assertEqual(entry.select_network(self.caddy(names), networks.__getitem__)['network'], 'a-frontend')
+
+    def test_legacy_bridge_uses_explicit_current_proxy_ip(self):
+        result = entry.select_network(self.caddy([('bridge', '172.17.0.2')]),
+                                      lambda _: self.network('bridge'))
+        self.assertEqual(result['upstream_resolution'], 'extra_host')
+        args = entry.launch_args(Path('/release'), {**result, 'revision': 'a' * 40,
+                                                  'image': 'sha256:' + 'b' * 64})
+        self.assertEqual(args[args.index('--add-host') + 1], 'caddy:172.17.0.2')
+
+    def test_invalid_or_absent_endpoint_is_not_selected(self):
+        for ip in ['', '0.0.0.0', '::1', '172.17.0.2;other', '127.0.0.1']:
+            with self.assertRaises(entry.EntryError):
+                entry.select_network(self.caddy([('bridge', ip)]), lambda _: self.network('bridge'))
+
+    def test_another_projects_external_network_is_not_a_fallback(self):
+        with self.assertRaises(entry.EntryError):
+            entry.select_network(self.caddy([('ai-gateway', '172.19.0.2')]),
+                                 lambda _: self.network('ai-gateway', 'ai-gateway', 'default'))
+
+    def plan(self, resolution='extra_host'):
+        network = 'bridge' if resolution == 'extra_host' else 'caddy_default'
+        image = 'sha256:' + 'b' * 64
+        current = {'Id': 'c' * 64, 'Image': image, 'State': {'Running': True},
+                   'Config': {'Labels': {'com.kirin.project': entry.PROJECT,
+                              'com.kirin.ip_entry_revision': 'a' * 40,
+                              'com.kirin.ip_entry_upstream_ip': '172.18.0.2'}},
+                   'HostConfig': {'NetworkMode': network,
+                                  'ExtraHosts': ['caddy:172.18.0.2'] if resolution == 'extra_host' else []}}
+        return {'current': current, 'revision': 'a' * 40, 'network': network,
+                'network_id': network + '-id', 'upstream_ip': '172.18.0.2',
+                'upstream_resolution': resolution, 'image': image}
+
+    def test_reapply_refreshes_changed_mapping_only_when_needed(self):
+        plan = self.plan()
+        self.assertFalse(entry.needs_replacement(plan))
+        plan['upstream_ip'] = '172.18.0.3'
+        self.assertTrue(entry.needs_replacement(plan))
+        plan['current']['Config']['Labels']['com.kirin.ip_entry_upstream_ip'] = '172.18.0.3'
+        self.assertTrue(entry.needs_replacement(plan))  # stale /etc/hosts still triggers rebuild
+        plan['current']['HostConfig']['ExtraHosts'] = ['caddy:172.18.0.3']
+        self.assertFalse(entry.needs_replacement(plan))
+
+    def test_dns_mode_tracks_proxy_ip_changes_and_unique_backup_name(self):
+        plan = self.plan('docker_dns')
+        self.assertFalse(entry.needs_replacement(plan))
+        plan['upstream_ip'] = '172.18.0.4'
+        self.assertTrue(entry.needs_replacement(plan))
+        self.assertTrue(entry.backup_name(plan).endswith('-' + 'c' * 12))
 
 
 class GatewayHelloBoundaryTests(unittest.IsolatedAsyncioTestCase):

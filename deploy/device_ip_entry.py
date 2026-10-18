@@ -2,6 +2,7 @@
 import argparse
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -66,6 +67,65 @@ def container_owned(value):
     return bool(value and (value['Config'].get('Labels') or {}).get('com.kirin.project') == PROJECT)
 
 
+def select_network(caddy, get_network=None):
+    """Prefer this Compose project's default bridge; never join another project's network."""
+    if get_network is None:
+        get_network = lambda name: json.loads(docker('network', 'inspect', name))[0]
+    project = (caddy['Config'].get('Labels') or {}).get('com.docker.compose.project')
+    candidates = []
+    for name, endpoint in sorted(caddy['NetworkSettings']['Networks'].items()):
+        if name in {'host', 'none'}:
+            continue
+        data = get_network(name)
+        if data.get('Driver') != 'bridge':
+            continue
+        labels = data.get('Labels') or {}
+        owner = labels.get('com.docker.compose.project')
+        same_project = bool(project and owner == project)
+        if project and name != 'bridge' and not same_project:
+            continue  # e.g. an attached external ai-gateway network
+        if not project and owner:
+            continue
+        if (data.get('Options') or {}).get('com.docker.network.bridge.enable_icc') == 'false':
+            continue
+        try:
+            address = ipaddress.ip_address(endpoint.get('IPAddress', ''))
+        except ValueError:
+            continue
+        if address.version != 4 or address.is_unspecified or address.is_loopback or address.is_multicast:
+            continue
+        if endpoint.get('NetworkID') and data.get('Id') != endpoint['NetworkID']:
+            continue
+        compose_default = same_project and labels.get('com.docker.compose.network') == 'default'
+        priority = 0 if compose_default else 1 if same_project else 2 if name == 'bridge' else 3
+        candidates.append(((priority, bool(data.get('Internal')), name), {
+            'network': name, 'network_id': data.get('Id'), 'upstream_ip': str(address),
+            'upstream_resolution': 'extra_host' if name == 'bridge' else 'docker_dns',
+            'selection_reason': 'compose_project_default' if compose_default else
+                                'compose_project_owned' if same_project else
+                                'default_bridge_fallback' if name == 'bridge' else 'deterministic_bridge'}))
+    if not candidates:
+        raise EntryError('No owned/default Caddy bridge with a valid reachable IPv4 endpoint')
+    return min(candidates, key=lambda item: item[0])[1]
+
+
+def needs_replacement(plan):
+    current = plan['current']
+    if not current:
+        return True
+    labels = current['Config'].get('Labels') or {}
+    expected_hosts = ['caddy:' + plan['upstream_ip']] if plan['upstream_resolution'] == 'extra_host' else []
+    return (not current['State']['Running'] or current.get('Image') != plan['image']
+            or labels.get('com.kirin.ip_entry_revision') != plan['revision']
+            or labels.get('com.kirin.ip_entry_upstream_ip') != plan['upstream_ip']
+            or current['HostConfig']['NetworkMode'] not in {plan['network'], plan['network_id']}
+            or (current['HostConfig'].get('ExtraHosts') or []) != expected_hosts)
+
+
+def backup_name(plan):
+    return NAME + '.pre-' + plan['revision'][:12] + '-' + plan['current']['Id'][:12]
+
+
 def preflight(release):
     revision = verify_bundle(release)
     caddy, gateway = inspect('caddy'), inspect('s2s-demo')
@@ -82,20 +142,13 @@ def preflight(release):
     if not match:
         raise EntryError('Caddy version unavailable')
     print('installed_caddy_version=' + match.group(), flush=True)
-    networks = []
-    for name in sorted(caddy['NetworkSettings']['Networks']):
-        if name in {'bridge', 'host', 'none'}:
-            continue
-        data = json.loads(docker('network', 'inspect', name))[0]
-        if data.get('Driver') == 'bridge':
-            networks.append(name)
-    if len(networks) != 1:
-        raise EntryError('Expected exactly one existing user-defined Caddy bridge network')
+    network = select_network(caddy)
+    print('selected_upstream=' + json.dumps(network), flush=True)
     current = inspect(NAME, optional=True)
+    plan = {'revision': revision, 'image': image, 'current': current, **network}
     if current and not container_owned(current):
         raise EntryError('Target container name belongs to another service')
-    if (current and (current['Config'].get('Labels') or {}).get('com.kirin.ip_entry_revision') != revision
-            and inspect(NAME + '.pre-' + revision[:12], optional=True)):
+    if current and needs_replacement(plan) and inspect(backup_name(plan), optional=True):
         raise EntryError('Backup container name already exists; no change made')
     if not current:
         with socket.socket() as check:
@@ -132,17 +185,19 @@ def preflight(release):
                '--mount', 'type=bind,src=' + str(release / 'device-ip.Caddyfile') + ',dst=/etc/caddy/Caddyfile,readonly',
                image, 'validate', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile')
     print('exact_existing_caddy_image_and_config_verified=true', flush=True)
-    return {'revision': revision, 'image': image, 'network': networks[0], 'current': current,
-            'root': root, 'token': device['device_token']}
+    return {**plan, 'root': root, 'token': device['device_token']}
 
 
 def launch_args(release, plan):
     args = ['run', '-d', '--pull=never', '--entrypoint', '/usr/bin/caddy',
             '--name', NAME, '--label', 'com.kirin.project=' + PROJECT,
             '--label', 'com.kirin.ip_entry_revision=' + plan['revision'],
+            '--label', 'com.kirin.ip_entry_upstream_ip=' + plan['upstream_ip'],
             '--network', plan['network'], '--publish', '0.0.0.0:8443:8443/tcp',
             '--restart', 'unless-stopped', *SECURITY, '--pids-limit', '64', '--memory', '128m',
             '--cpus', '0.5', '--tmpfs', '/tmp:rw,noexec,nosuid,size=8m']
+    if plan['upstream_resolution'] == 'extra_host':
+        args += ['--add-host', 'caddy:' + plan['upstream_ip']]
     for source, target, readonly in [(release / 'device-ip.Caddyfile', '/etc/caddy/Caddyfile', True),
                                      (SHARED / 'ca', '/ca', True), (SHARED / 'data', '/data', False),
                                      (SHARED / 'config', '/config', False)]:
@@ -211,7 +266,7 @@ def health(plan):
 
 def switch(release, plan, check=health):
     old = plan['current']
-    backup = NAME + '.pre-' + plan['revision'][:12]
+    backup = backup_name(plan) if old else None
     renamed = False
     started = None
     try:
@@ -222,7 +277,8 @@ def switch(release, plan, check=health):
         started = docker(*launch_args(release, plan)).decode().strip()
         result = check(plan)
         state = {'revision': plan['revision'], 'container_id': started,
-                 'previous_id': old['Id'] if old else None, 'previous_name': backup if old else None}
+                 'previous_id': old['Id'] if old else None, 'previous_name': backup,
+                 **{k: plan.get(k) for k in ('network', 'network_id', 'upstream_ip', 'upstream_resolution')}}
         temporary = SHARED / 'deployment-state.tmp'
         temporary.write_text(json.dumps(state, indent=2) + '\n')
         os.chmod(temporary, 0o600)
@@ -251,7 +307,7 @@ def rollback(revision):
     if (state['revision'] != revision or current['Id'] != state['container_id']
             or not container_owned(current)):
         raise EntryError('Rollback identity mismatch; no change made')
-    disabled = NAME + '.disabled-' + revision[:12]
+    disabled = NAME + '.disabled-' + revision[:12] + '-' + current['Id'][:12]
     if inspect(disabled, optional=True):
         raise EntryError('Retained container name already exists; no change made')
     previous = inspect(state['previous_name']) if state['previous_id'] else None
@@ -308,7 +364,7 @@ def main():
         os.chown(path, 0, 0)
         os.chmod(path, 0o600)
     current = plan['current']
-    if current and (current['Config'].get('Labels') or {}).get('com.kirin.ip_entry_revision') == revision:
+    if not needs_replacement(plan):
         checks = health(plan)
         print('ip_entry_revision_already_deployed=true')
     else:

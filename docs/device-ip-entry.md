@@ -8,7 +8,10 @@ IP 与端口是否能通过当前云侧入口，必须由设备实测，不能�
 
 只新增 `s2s-device-ip` 侧车，使用运行中主 Caddy 的精确镜像 ID，不拉取或升级镜像。
 主 Caddy、S2S 容器、既有站点配置及网页 Origin 均不修改、不重启或 reload。
-侧车加入主 Caddy 已有的用户定义 bridge 网络，发布 `0.0.0.0:8443:8443/tcp`。
+侧车优先加入主Caddy的Compose项目默认bridge网络：由容器及network inspect的Compose标签识别，
+不要求网络唯一，不加入其他项目的外部网络（如`ai-gateway`）。同项目多个其他bridge按确定顺序选择。
+仅有传统`bridge`时使用同一网络并以`--add-host caddy:<当前Caddy IP>`明确上游地址。
+发布仅限 `0.0.0.0:8443:8443/tcp`，不向主Caddy增删网络。
 精确 GET `/device/v1/ws` 经 HTTPS 转发到 `caddy:443`，设置
 `Host: s2s.kirinxu.cn` 与 `tls_server_name s2s.kirinxu.cn`，验证上游公有证书。
 其他路径一律404，管理API关闭、无HTTP重定向或HTTP/3端口。
@@ -38,6 +41,8 @@ drop ALL后只保留`NET_BIND_SERVICE`，兼容镜像二进制的file capability
 验证失败自动移除本次已识别侧车，并恢复之前的同名侧车（如果存在）。
 `--rollback`按保存的容器ID核验后停用新侧车，保留容器和CA数据，并恢复之前的侧车。
 不会删除或停用身份不符的容器。默认无任何主机防火墙或云安全组变更。
+上游网络、IP及解析方式记录到侧车标签/私密部署状态；重复apply发现IP、映射或镜像变化时，
+仅重建侧车。备份名包含原侧车ID，避免同版本刷新映射时覆盖旧备份。
 
 健康检查覆盖：以IP为`server_hostname`、无SNI且可信根验证成功；TLS1.2；
 错误CA/IP拒绝；缺失/错误token401；其他路径404；合法token WebSocket升级101后立即关闭，
