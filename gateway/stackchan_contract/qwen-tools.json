@@ -16,7 +16,7 @@
     "type": "function",
     "function": {
       "name": "stackchan_perform_targets",
-      "description": "Execute freely chosen target keyframes. Prefer this for normal robot interaction instead of calculating frame timestamps. Choose arbitrary absolute head poses, expressions, lights and their order; there are no fixed nod/shake templates. The gateway derives timing and intermediate waypoints from the fresh measured pose and device capabilities; the firmware interpolates the movement. All channels within a step begin together. hold_ms means a pause after settling. For a nod choose different pitch targets; for a shake choose left and right yaw targets. Set return_to_neutral=true when the user asks to finish facing forward; code targets calibrated yaw=0,pitch=0 rather than copying a measured offset. Mechanical limits and total command bounds remain enforced; infeasible plans are atomically rejected, never clipped. Returns the effective plan and accepted acknowledgement; use stackchan_get_command to confirm completion.",
+      "description": "Execute freely chosen target keyframes. Prefer this for normal robot interaction instead of calculating frame timestamps. Choose arbitrary absolute head poses, expressions, lights and their order; there are no fixed nod/shake templates. The gateway derives timing and intermediate waypoints from the fresh measured pose and device capabilities; the firmware interpolates the movement. All channels within a step begin together. hold_ms means a pause after settling. For a nod choose different pitch targets; for a shake choose left and right yaw targets. Set return_to_neutral=true when the user asks to finish facing forward; code targets calibrated yaw=0,pitch=0 rather than copying a measured offset. Mechanical limits and total command bounds remain enforced; infeasible plans are atomically rejected, never clipped. Returns the effective plan and accepted acknowledgement; use stackchan_get_command to confirm completion. Directional look/turn requests end at and retain the requested pose: explicitly use return_to_neutral=false and do not append a zero-pose step unless the user asks to return. hold_ms is a minimum pause, not a timeout that restores neutral. Expressions and lights may be accompanied by context-appropriate head poses chosen by the agent. Do not automatically append a neutral pose to these expressive combinations.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -182,7 +182,7 @@
           "return_to_neutral": {
             "type": "boolean",
             "default": false,
-            "description": "Append a computed calibrated zero-pose target after the requested steps when needed."
+            "description": "Defaults to false: retain the final requested pose. Use false for directional look/turn commands unless a return is requested. Expressions and lights may be combined with suitable head poses. Set true only when returning to calibrated forward neutral is an intentional part of the action; do not automatically recenter every action. hold_ms expiry does not recenter."
           }
         },
         "required": [

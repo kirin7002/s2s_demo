@@ -191,6 +191,11 @@ class ContractTests(unittest.TestCase):
         self.assertIn('模拟', tools['instructions'])
         for text in ('stackchan_perform_targets', 'return_to_neutral=true', '不计算速度', '20个中文字符', '不可猜成锁定'):
             self.assertIn(text, tools['instructions'])
+        for text in ('定向看/转向默认保持最终目标', '明确设置return_to_neutral=false',
+                     'hold_ms结束不意味着恢复', '允许自由选择上下文恰当的头部姿态配合表情与灯光'):
+            self.assertIn(text, tools['instructions'])
+        self.assertNotIn('仅表情或灯光不得添加head', tools['instructions'])
+        self.assertNotIn('未要求改变的输出不要擅自改动', tools['instructions'])
         perform = next(t for t in QWEN_TOOLS if t['function']['name'] == 'stackchan_perform')
         self.assertIn('timing_mode defaults to auto', perform['function']['description'])
         self.assertNotIn(TOKEN, repr(config) + json.dumps(tools))
