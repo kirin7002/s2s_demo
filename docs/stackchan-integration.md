@@ -95,3 +95,46 @@ cd /Users/kirin/go_path/s2s_demo
 以及模拟标记贯穿工具结果、真实单调时钟下多帧点头完成。
 S2S自己的故障fixture只注入传输故障，不重复实现固件调度。
 真实手机、物理机器人、可信公网WSS和真实模型的组合仍未验证，不能用这些本机结果代替。
+
+## 本机 TLS 真机联测准备（2026-10-18）
+
+`scripts/stackchan_hardware.py`为独立的本地测试入口，使用原有`create_app`、登录/绑定、
+DeviceHub和ToolCalls；模型连接器固定为进程内模拟Qwen，不读取项目.env、不连接模型供应商、
+不操作串口。常规网关的监听范围和默认配置不变。此入口只用于明确授权的局域网真机测试。
+
+当前en0为`192.168.31.111`，临时TLS端点为`wss://192.168.31.111:8443/device/v1/ws`；
+旧`192.168.0.117`不再适用。只监听此LAN地址与127.0.0.1，未安装系统级信任或修改云资源。
+临时CA与服务器证书有效期3天，SAN包含当前LAN IP、127.0.0.1和localhost。
+固件须信任配置中的CA，不使用跳过校验。地址变化或证书过期后应建立新私密目录重新准备，
+不要覆盖正在联调的配置。
+
+```sh
+# 仅首次准备：私密材料不会输出到终端。
+.venv/bin/python scripts/stackchan_hardware.py init --host 192.168.31.111 --port 8443
+.venv/bin/python scripts/stackchan_hardware.py serve
+# 只查看状态，不开启语音或控制会话。
+.venv/bin/python scripts/stackchan_hardware.py status
+```
+
+运行目录`.run/stackchan-hardware/`已被Git忽略，目录0700、文件及本地控制socket为0600：
+`device-config.json`供固件侧安全读取host/port/path、设备随机凭据和CA PEM；
+`server-config.json`含独立测试登录口令和服务端证书路径；`state.json`是脱敏运行状态；
+`preparation-checks.json`记录启动自检。不要把这些文件内容贴到聊天或提交仓库。
+Wi-Fi NVS、舵机零位/符号/使能和固件PSRAM配置均由设备侧负责，本脚本不改动。
+
+启动仅监听，不自动创建语音会话、绑定控制或下发命令。`preflight`会临时走真实登录、关联和工具注册，
+随后关闭会话，不调用perform；当前该预检已结束，设备命令数为0。
+`model_session_count`是累计模拟会话数，包含已经关闭的预检，并不表示活动控制。
+USB只读舵机探测期间只使用`status`，等待设备侧报告结束；不要运行preflight或tool操作。
+
+私密Unix socket提供测试RPC，不在LAN增设注入API。`request --request-file <私密JSON路径>`可调用
+`tool`（`calls:[{name,arguments}]`）、`close_voice`、`interrupt`、`speech_interrupt`或`disconnect`。
+头部禁动时允许查询、纯屏幕/灯光perform和stop，不要求servo-ready；带任意head字段的命令
+在创建会话和下发前拒绝。后续只有收到舵机就绪报告后才能提供同目录`servo_ready:true`记录并调用
+`servo_ready`，且实际设备必须声明`simulated=false`、head已启用且已标定；测试角度另限±5°。
+当前门槛仍关闭，没有创建就绪记录或启用舵机。
+
+已通过LAN/回环地址的CA与主机名验证、未信任CA拒绝、私密文件权限、登录/绑定/四工具注册、
+含head调用拒绝自检。另4项隔离TLS回归验证上述边界，以及禁动时屏幕/灯光/stop可经过真实工具链；
+其中设备为合成fixture，明确返回`simulated=true`，不是K151的硬件验收结果。
+真机连接后的读状态、屏幕灯光和路由测试待USB探测结束；舵机动作继续等待设备侧确认。

@@ -6,6 +6,20 @@
 
 ## 最新状态：2026-10-18
 
+本机K151 TLS联测网关已启动，当前Mac en0为`192.168.31.111`，设备端点
+`wss://192.168.31.111:8443/device/v1/ws`（旧192.168.0.117失效）。服务入口
+`scripts/stackchan_hardware.py`使用真实网关/设备/工具代码和进程内模拟Qwen，不读取.env或访问付费模型。
+私密配置、临时CA/服务器私钥及状态仅在已忽略的`.run/stackchan-hardware/`，目录0700、文件0600；
+固件侧已安全读取`device-config.json`，不要再输出或传输其中凭据。运行状态查看该目录`state.json`或脚本status。
+
+当前阶段：**保持监听，等待设备侧完成USB只读servo_probe并报告。不要开启语音控制会话或下发perform。**
+此前登录/绑定/四工具注册预检已关闭，设备命令数0；状态中的model_session_count为累计已关闭模拟会话数。
+屏幕/灯光/查询/stop不要求舵机就绪，但须等USB探测结束再联测；所有包含head的命令继续禁用，
+只有设备侧明确确认且真实设备已启用/标定后才能解锁，测试额外限制±5°。
+已通过LAN/回环TLS及CA/主机名、私密权限、禁动门槛自检，另28项隔离TLS/StackChan回归通过。
+没有操作USB、改变Wi-Fi NVS或部署线上；设备IP由对方报告为192.168.31.112，尚待实际WSS连接。
+启动及控制入口详见[接入文档](stackchan-integration.md)。以下是此前首版集成和部署的历史状态。
+
 产品定位已调整为个人助理 Agent，定位提交`7e558d4`保存在本地。随后按用户批准完成StackChan网关首版：
 `gateway/stackchan.py`负责设备Bearer认证、单配置设备与登录会话绑定、WebSocket路由、ACK/状态/租约；
 `gateway/tool_calls.py`负责四个原生函数、完整参数、call_id去重、output_index串行、独立response_epoch与设备generation，

@@ -5,3 +5,4 @@ __pycache__/
 !.env.example
 test-results/
 *.pyc
+.run/stackchan-hardware/
