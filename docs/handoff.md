@@ -22,7 +22,13 @@
 私密配置、临时CA/服务器私钥及状态仅在已忽略的`.run/stackchan-hardware/`，目录0700、文件0600；
 固件侧已安全读取`device-config.json`，不要再输出或传输其中凭据。运行状态查看该目录`state.json`或脚本status。
 
-当前阶段：**三轮运动联测均触发保护中止；保持网关监听，不重跑、不回中，等待设备侧进一步分析。**
+当前阶段：**四轮运动联测均触发保护中止；保持网关监听，不重跑、不回中，等待设备侧进一步分析。**
+第四轮经设备侧明确通知，在舍入修复固件boot=`esp32_9cdc77a2_b6f7843c`上通过WSS执行相同测试。
+`hardware-motion-rounding-results.json`记录首个yaw+3/pitch0再次真实failed/MOTION_TIMEOUT，
+partial_applied=true，立即stop并中止全部后续head，没有调整参数或操作USB。
+起始、途中及独立停止后只读姿态均约yaw1.9°/pitch-1.6°，终态online/fresh=true、simulated=false，无活动命令。
+中性/熄灯fresh completed，语音与控制均释放；独立证据`hardware-motion-rounding-final-readonly.json`。
+前三轮原报告哈希全部保持不变；停止后姿态不代表故障瞬时值。
 第三轮已在设备侧修复USB诊断阻塞、增加预算内稳定期后按明确通知执行，
 结果另存`hardware-motion-settling-results.json`。运动参数未变，仅RGB提高至同色相255级，brightness仍0.08。
 首个yaw+3/pitch0步骤即收到真实`failed/MOTION_TIMEOUT/partial_applied=true`，后续步骤全部中止。

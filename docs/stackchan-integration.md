@@ -174,6 +174,12 @@ partial_applied=true；立即stop，后续运动全部中止，没有回中。�
 独立`hardware-motion-settling-final-readonly.json`记录停止后的fresh真实pose：yaw约1.8°、pitch约-1.6°，
 active_command_id为空；不能将这个稍后姿态当作故障时瞬时值。前两轮报告哈希不变。
 当前等待进一步分析，不自动重跑，不改变阈值。
+随后经明确通知，在舍入修复固件上执行第四轮，测试参数与配色均未变。
+`hardware-motion-rounding-results.json`首个yaw+3/pitch0再次收到真实failed/MOTION_TIMEOUT，
+立即stop，未执行后续运动或回中；中性/熄灯completed，控制释放。
+独立`hardware-motion-rounding-final-readonly.json`记录终态yaw约1.9°/pitch约-1.6°，
+online/fresh=true、simulated=false且无活动命令；起始和途中样本也是该姿态。
+前三轮原报告哈希不变，仍不据停止后样本推定故障时瞬时姿态，不自动重跑。
 本机网关保持监听，没有真实麦克风、付费模型或摄像头视觉验收。
 
 ### 日志
