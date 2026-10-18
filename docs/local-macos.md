@@ -2,6 +2,20 @@
 
 准备日期：2026-10-17。项目目录：`/Users/kirin/go_path/s2s_demo`。
 
+## 当前真实电脑联调入口（2026-10-18）
+
+已运行的真实网关入口为 **http://localhost:8080/login**，仅监听127.0.0.1，不需安装CA。
+使用根目录`.env`的`S2S_DEMO_PASSWORD`登录，在页面关联StackChan，再点击接通并允许麦克风。
+设备仍以可信WSS连接`kirindeMacBook-Air.local:8443`，两个入口共享同一DeviceHub与授权控制，
+各自精确校验Origin。`http://127.0.0.1:8080`不是此入口的配置Origin，请使用完整localhost链接。
+当前进程由`.venv/bin/python scripts/serve_s2s_tls.py`启动；不要再运行下文基础模式命令争用8080。
+正常会话/协议限制、鉴权和停止保护保留，临时只读/±3°/90秒测试配置已移除。
+只读诊断：`.venv/bin/python scripts/s2s_status.py --op get_state`，无需模型调用。
+已确认电脑Chrome安全上下文与麦克风API存在、登录与绑定接口可用、真机在线；实际用户麦克风与连续通话待用户发起。
+手机访问局域网HTTPS需另有可信证书，当前不要求安装全局CA，先按用户要求完成电脑真实语音。
+
+以下为基础模式与早期准备说明；运行前先确认没有现存联调服务。
+
 常规S2S配置位于此项目根目录`.env`，登录口令为`S2S_DEMO_PASSWORD`；不在聊天中提供或展示秘密。
 另有`.run/stackchan-hardware/`私密目录用于机器人真机联测，包含临时TLS证书、设备凭据及独立测试口令。
 它仍属于同一个仓库，但8443联测入口固定使用模拟模型，不是日常真实语音入口；

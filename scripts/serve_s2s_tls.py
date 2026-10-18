@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT))
 from aiohttp import WSMsgType, web
 from gateway.config import Config
 from gateway.action_audit import action_summary
-from gateway.server import ACTIVE, CLIENT, DEVICES, create_app
+from gateway.server import ACTIVE, ATTEMPTS, CLIENT, DEVICES, LOGINS, OWNERS, create_app
 from scripts.stackchan_hardware import private_json, private_write
 
 DEFAULT_DIRECTORY = ROOT / '.run/s2s-live'
@@ -109,6 +109,12 @@ class Runtime:
         self.providers = []
         self.app = create_app(self.config, connector=self.connect)
         self.hub = self.app[DEVICES]
+        self.local_origin = 'http://localhost:8080'
+        self.local_app = create_app(replace(self.config, origin=self.local_origin), connector=self.connect)
+        # One device/controller and one account/session store. Separate origins
+        # retain exact CSRF/WS checks and the appropriate Secure cookie policy.
+        for key in (ACTIVE, ATTEMPTS, DEVICES, LOGINS, OWNERS):
+            self.local_app[key] = self.app[key]
         self.control_socket = self.directory / 'control.sock'
 
     def record(self, stage, **fields):
@@ -132,6 +138,7 @@ class Runtime:
         connection = self.hub.connection
         return {'pid': os.getpid(), 'mode': 'real_provider', 'model': self.config.model,
             'origin': self.config.origin, 'device_connected': bool(connection and connection.online),
+            'computer_origin': self.local_origin,
             'connection_id': connection.id if connection else None,
             'simulated': connection.capabilities.get('simulated') if connection else None,
             'capabilities': connection.capabilities if connection else {},
@@ -190,17 +197,20 @@ class Runtime:
             raise ValueError('Existing local status socket requires review')
         runner = web.AppRunner(self.app, access_log=None)
         await runner.setup()
+        local_runner = web.AppRunner(self.local_app, access_log=None)
+        await local_runner.setup()
         control = None
         task = None
         try:
             await web.TCPSite(runner, '0.0.0.0', self.hardware['port'], ssl_context=tls).start()
+            await web.TCPSite(local_runner, '127.0.0.1', 8080).start()
             control = await asyncio.start_unix_server(self.control, path=self.control_socket)
             self.control_socket.chmod(0o600)
             task = asyncio.create_task(self.persist())
             for sig in (signal.SIGINT, signal.SIGTERM):
                 asyncio.get_running_loop().add_signal_handler(sig, self.stop.set)
             self.record('gateway_started', real_provider=True, read_only=self.config.stackchan_read_only)
-            print('S2S real-provider TLS gateway listening; root .env login; no provider connection until a call.', flush=True)
+            print('S2S listening: http://localhost:8080/login; device TLS preserved; no provider connection until a call.', flush=True)
             await self.stop.wait()
         finally:
             if task:
@@ -210,6 +220,7 @@ class Runtime:
                 control.close()
                 await control.wait_closed()
                 self.control_socket.unlink(missing_ok=True)
+            await local_runner.cleanup()
             await runner.cleanup()
             private_json(self.directory / 'state.json', {**self.status(), 'stopped': True})
             self.record('gateway_stopped')

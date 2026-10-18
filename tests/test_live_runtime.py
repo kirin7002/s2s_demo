@@ -11,6 +11,7 @@ from gateway.config import Config
 from scripts.serve_s2s_tls import Runtime, TrackedProvider
 from gateway.action_audit import action_summary
 from scripts.verify_s2s_live import battery_sample_valid
+from gateway.server import ACTIVE, CONFIG, DEVICES, LOGINS, OWNERS
 
 
 class Socket:
@@ -52,6 +53,9 @@ class LiveRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.runtime.config.max_sessions, 2)
         self.assertEqual(self.runtime.status()['provider_connection_attempts'], 0)
         self.assertEqual(self.runtime.status()['active_sessions'], 0)
+        self.assertEqual(self.runtime.local_app[CONFIG].origin, 'http://localhost:8080')
+        for key in (ACTIVE, DEVICES, LOGINS, OWNERS):
+            self.assertIs(self.runtime.local_app[key], self.runtime.app[key])
 
     async def test_tool_failure_is_returned_under_normal_coordinator_policy(self):
         socket = Socket()
