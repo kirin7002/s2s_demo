@@ -6,12 +6,13 @@ from pathlib import Path
 import socket
 import ssl
 import stat
+import subprocess
 import tempfile
 import unittest
 
 from aiohttp import ClientConnectorCertificateError, ClientSession, WSMsgType
 
-from scripts.stackchan_hardware import DEFAULT_DIRECTORY, HardwareHarness, prepare, request_local
+from scripts.stackchan_hardware import DEFAULT_DIRECTORY, HardwareHarness, certificate_names, migrate_address, prepare, request_local
 from tests.test_stackchan import CAPABILITIES, until
 
 
@@ -98,6 +99,48 @@ class HardwareHarnessTests(unittest.IsolatedAsyncioTestCase):
         response = await request_local(self.config, request)
         self.assertFalse(response['ok'])
         self.assertFalse(self.h.models or self.h.hub.records)
+
+    async def test_bonjour_migration_preserves_ca_and_credentials(self):
+        ca_before = Path(self.config['ca_certificate_file']).read_bytes()
+        key_before = Path(self.config['server_private_key_file']).read_bytes()
+        await asyncio.to_thread(migrate_address, self.root, 'stable-test.local', '127.0.0.1')
+        updated = json.loads((self.root / 'server-config.json').read_text())
+        device = json.loads((self.root / 'device-config.json').read_text())
+        self.assertTrue(updated['device_token'] == self.config['device_token'] == device['device_token'])
+        self.assertTrue(updated['demo_password'] == self.config['demo_password'])
+        self.assertTrue(Path(updated['ca_certificate_file']).read_bytes() == ca_before)
+        self.assertTrue(Path(updated['server_private_key_file']).read_bytes() == key_before)
+        self.assertEqual(updated['listen_host'], '0.0.0.0')
+        self.assertEqual(device['host'], 'stable-test.local')
+        result = await asyncio.to_thread(subprocess.run, ['openssl', 'x509', '-in', updated['server_certificate_file'],
+                                                          '-noout', '-text'], capture_output=True, text=True, check=True)
+        self.assertIn('DNS:stable-test.local', result.stdout)
+        for bad in ('evil.example', 'evil.local\nsubjectAltName=DNS:evil.example'):
+            with self.assertRaises(ValueError):
+                certificate_names(bad, '127.0.0.1')
+
+    async def test_device_log_omits_authorization_and_secret_values(self):
+        marker = 'synthetic-header-that-must-not-be-logged'
+        async with self.client.get(self.base + '/device/v1/ws', ssl=self.tls,
+                                   headers={'Authorization': 'Bearer ' + marker}) as response:
+            self.assertEqual(response.status, 401)
+        log = (self.root / 'gateway-events.jsonl').read_text()
+        self.assertFalse(marker in log or self.config['device_token'] in log or self.config['demo_password'] in log)
+        entries = [json.loads(line) for line in log.splitlines()]
+        self.assertTrue(any(e.get('http_status') == 401 and e.get('peer_ip') == '127.0.0.1' for e in entries))
+
+    async def test_closed_tls_transport_still_records_only_fixed_diagnostic(self):
+        class DetachedTransport:
+            def get_extra_info(self, name):
+                raise AttributeError('synthetic-private-error-text')
+
+        self.h.transport_error(None, {'exception': ConnectionResetError('synthetic-private-error-text'),
+                                     'transport': DetachedTransport()})
+        log = (self.root / 'gateway-events.jsonl').read_text()
+        self.assertNotIn('synthetic-private-error-text', log)
+        entry = json.loads(log.splitlines()[-1])
+        self.assertEqual(entry['category'], 'PEER_CLOSED_DURING_HANDSHAKE')
+        self.assertIsNone(entry['peer_ip'])
 
     async def test_screen_light_state_and_stop_work_before_servo_readiness(self):
         await self.attach_synthetic_device()

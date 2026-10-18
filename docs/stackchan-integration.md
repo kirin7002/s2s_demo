@@ -6,7 +6,7 @@
 协议源为 StackChan Wall-E 仓库的 `docs/control-protocol.md`，能力源为 `protocol/tools.json`，
 设备命令为 `protocol/command.schema.json`；Qwen声明由同一能力源转换，不另行定义一套动作语义。
 本机仓库为 `/Users/kirin/Documents/ChatGPT/stackchan-wall-e`。对方报告24项契约检查通过，
-尚无真机或真实模型联调；此数量不是S2S端测试结果。
+该契约检查数量不是S2S端测试结果；后续本机真机WSS结果见文末，真实模型组合仍未验收。
 
 - 设备以STA Wi-Fi主动建立到现有网关的WSS连接。设备路由放在现有Python进程，首版原生Function Calling，MCP后续复用目录。
 - 四个工具为 `stackchan_get_state`、`stackchan_perform`、`stackchan_get_command`、`stackchan_stop`。
@@ -102,15 +102,17 @@ S2S自己的故障fixture只注入传输故障，不重复实现固件调度。
 DeviceHub和ToolCalls；模型连接器固定为进程内模拟Qwen，不读取项目.env、不连接模型供应商、
 不操作串口。常规网关的监听范围和默认配置不变。此入口只用于明确授权的局域网真机测试。
 
-当前en0为`192.168.31.111`，临时TLS端点为`wss://192.168.31.111:8443/device/v1/ws`；
-旧`192.168.0.117`不再适用。只监听此LAN地址与127.0.0.1，未安装系统级信任或修改云资源。
-临时CA与服务器证书有效期3天，SAN包含当前LAN IP、127.0.0.1和localhost。
-固件须信任配置中的CA，不使用跳过校验。地址变化或证书过期后应建立新私密目录重新准备，
-不要覆盖正在联调的配置。
+临时TLS端点为`wss://kirindeMacBook-Air.local:8443/device/v1/ws`，监听`0.0.0.0:8443`。
+主机与设备均已验证Bonjour解析，设备以该DNS名进行TLS主机名校验；最近核验IP为192.168.31.102，
+Wi-Fi切换可能改变IP。未安装系统级信任或修改云资源，登录与设备Bearer鉴权保留。
+临时CA与服务器证书有效期3天，SAN包含Bonjour名、准备时的LAN IP、127.0.0.1和localhost。
+固件须信任配置中的CA，不使用跳过校验。只换同Mac的LAN地址时保留CA和设备凭据；
+`migrate-address`会备份配置并只更新叶证书及地址，必须在服务停止且协调允许后使用，不自动重启。
+证书过期需另行协调更新。Bonjour仅适合同一LAN，跨网络仍需稳定云域名。
 
 ```sh
 # 仅首次准备：私密材料不会输出到终端。
-.venv/bin/python scripts/stackchan_hardware.py init --host 192.168.31.111 --port 8443
+.venv/bin/python scripts/stackchan_hardware.py init --host kirindeMacBook-Air.local --port 8443
 .venv/bin/python scripts/stackchan_hardware.py serve
 # 只查看状态，不开启语音或控制会话。
 .venv/bin/python scripts/stackchan_hardware.py status
@@ -123,7 +125,7 @@ DeviceHub和ToolCalls；模型连接器固定为进程内模拟Qwen，不读取�
 Wi-Fi NVS、舵机零位/符号/使能和固件PSRAM配置均由设备侧负责，本脚本不改动。
 
 启动仅监听，不自动创建语音会话、绑定控制或下发命令。`preflight`会临时走真实登录、关联和工具注册，
-随后关闭会话，不调用perform；当前该预检已结束，设备命令数为0。
+随后关闭会话，不调用perform；此预检本身不生成设备命令。
 `model_session_count`是累计模拟会话数，包含已经关闭的预检，并不表示活动控制。
 USB只读舵机探测期间只使用`status`，等待设备侧报告结束；不要运行preflight或tool操作。
 
@@ -132,17 +134,48 @@ USB只读舵机探测期间只使用`status`，等待设备侧报告结束；不
 头部禁动时允许查询、纯屏幕/灯光perform和stop，不要求servo-ready；带任意head字段的命令
 在创建会话和下发前拒绝。后续只有收到舵机就绪报告后才能提供同目录`servo_ready:true`记录并调用
 `servo_ready`，且实际设备必须声明`simulated=false`、head已启用且已标定；测试角度另限±5°。
-当前门槛仍关闭，没有创建就绪记录或启用舵机。
+门槛只表示测试入口授权状态，不等于有活动控制会话。当前已完成授权运动测试并暂停，详见下文。
 
 已通过LAN/回环地址的CA与主机名验证、未信任CA拒绝、私密文件权限、登录/绑定/四工具注册、
-含head调用拒绝自检。另4项隔离TLS回归验证上述边界，以及禁动时屏幕/灯光/stop可经过真实工具链；
+含head调用拒绝自检。隔离TLS与失败保护回归共9项，覆盖CA/凭据迁移、脱敏诊断、禁动边界及动作失败后停止；
 其中设备为合成fixture，明确返回`simulated=true`，不是K151的硬件验收结果。
 之后已收到设备侧明确开始通知，实际运行`verify_stackchan_hardware.py --run`，20项禁动真机检查全部通过，
 包含真实能力、7表情、中文、RGB四色、带停顿组合序列、provider call_id去重、BUSY与stop、
 手动/模拟VAD打断、失联拒绝不排队、重连旧历史unknown及重连后执行。全部含设备反馈的证据为simulated=false。
-没有head帧，没有启用servo_ready；原始设备帧重放/过期拒绝不在本次硬件结果覆盖范围内。
+该禁动套件没有head帧，没有启用servo_ready；原始设备帧重放/过期拒绝不在本次硬件结果覆盖范围内。
 最终恢复中性表情和熄灯取得fresh completed。首次关闭后立即检查得到control_released=false，
 后续独立只读查询实际voice_session_active=false、control_session_active=false。
 原报告不变；独立`.run/stackchan-hardware/hardware-no-head-final-verification.json`保留原哈希、首次快照及后续状态。
-脚本已修正为等待异步清理完成后再记录释放结果。本轮结束保持TLS网关运行，不再创建语音会话或下发动作。
-舵机反馈异常仍未解决，舵机测试尚未开始；没有真实麦克风、付费模型或摄像头视觉验收。
+脚本已修正为等待异步清理完成后再记录释放结果。
+
+### 授权小角度运动结果与暂停
+
+设备侧修复供电后明确确认真实head已启用/标定，限位±5°、最高10°/s、容差1.5°。
+`verify_stackchan_motion.py`只在显式`--run`且私密servo-ready报告核验通过后执行±3°，
+单轴move至少1200ms、duration1500ms；软件pitch零位对应真实BSP30°。默认只展示计划。
+现有报告禁止覆盖；`--report-name`可指定经另行授权的复测文件，不构成自动重跑许可。
+任意failed或反馈异常立即stop并中止后续head，失败后只恢复中性表情/熄灯并释放控制，不回中。
+
+首次`hardware-motion-results.json`第二个yaw步骤收到真实`MOTION_TIMEOUT`，原始失败记录及只读终态保留。
+设备侧修复双层插值后，第二轮使用相同阈值与序列，`hardware-motion-direct-results.json`记录六个单轴步骤和摇头通过；
+点头第三hold实测pitch=-1.9°超过1.5°，触发本地`FEEDBACK_OUT_OF_TOLERANCE`，并非已记录的固件failed。
+已stop，中性/熄灯fresh completed，语音与控制会话释放；后续运动中打断及最终回零尚未验证。
+第三hold计划在本地ACK返回后4800ms读取，第三帧计划3400+1200ms结束；
+采样晚于该帧计划move窗口，但早于整条5000ms结束。原报告缺少ACK时间锚点与设备时钟，
+也未记录停止前瞬时命令状态；不能补造completed或把最后hold称作停止后终态。
+独立`hardware-motion-direct-timing-analysis.json`保留原报告哈希和证据缺口。
+用户正在切换Wi-Fi频段，等待设备侧网络稳定通知后只读补证，不重跑、不放宽阈值。
+本机网关保持监听，没有真实麦克风、付费模型或摄像头视觉验收。
+
+### 日志
+
+本机联测脱敏日志`.run/stackchan-hardware/gateway-events.jsonl`持续追加启动、TLS固定错误分类、
+设备HTTP状态与上下线事件，1MB轮换；不记录Authorization、凭据、请求正文或原始异常。
+`gateway-log-view.txt`是人可读快照，不代表实时状态。握手结束后transport已释放时也只写固定分类。
+阿里云已部署网关是另一个服务：当前SSH可连接，但Docker日志读取权限不足，尚未取得生产日志。
+用户可在自己的终端执行以下只读命令并自行输入sudo口令：
+
+```sh
+ssh -t -F /Users/kirin/go_path/jev_demo/.run/server-management/ssh_config aliyun-kirin \
+  'sudo docker logs --timestamps --tail 100 -f s2s-demo'
+```

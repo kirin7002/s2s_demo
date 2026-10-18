@@ -12,8 +12,10 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import signal
+import socket
 import ssl
 import subprocess
 import sys
@@ -43,10 +45,42 @@ def private_json(path, value):
     private_write(path, json.dumps(value, ensure_ascii=False, indent=2) + '\n')
 
 
-def prepare(directory, host, port):
-    address = ipaddress.ip_address(host)
+def certificate_names(host, lan_ip=None):
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        if not re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.local', host):
+            raise ValueError('Only a local Bonjour name or private IPv4 address is allowed') from None
+        if lan_ip is None:
+            candidates = [item[4][0] for item in socket.getaddrinfo(host, None, socket.AF_INET)]
+            lan_ip = next((value for value in candidates if not ipaddress.ip_address(value).is_loopback), None)
+        address = ipaddress.ip_address(lan_ip)
     if address.version != 4 or not address.is_private or address.is_unspecified:
         raise ValueError('A specific private LAN IPv4 address is required')
+    names = [f'IP:{address}', 'IP:127.0.0.1', 'DNS:localhost']
+    if host.lower().endswith('.local'):
+        names.insert(0, 'DNS:' + host)
+    return list(dict.fromkeys(names)), str(address)
+
+
+def server_certificate_config(names):
+    return f'''[req]
+prompt=no
+distinguished_name=dn
+req_extensions=server
+[dn]
+CN=StackChan LAN Hardware Test
+[server]
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature,keyEncipherment
+extendedKeyUsage=serverAuth
+subjectAltName={','.join(names)}
+subjectKeyIdentifier=hash
+'''
+
+
+def prepare(directory, host, port, lan_ip=None):
+    names, address = certificate_names(host, lan_ip)
     if not 1024 <= port <= 65535:
         raise ValueError('Invalid test port')
     directory = Path(directory).resolve()
@@ -69,19 +103,7 @@ basicConstraints=critical,CA:TRUE,pathlen:0
 keyUsage=critical,keyCertSign,cRLSign
 subjectKeyIdentifier=hash
 ''')
-    private_write(server_conf, f'''[req]
-prompt=no
-distinguished_name=dn
-req_extensions=server
-[dn]
-CN=StackChan LAN Hardware Test
-[server]
-basicConstraints=critical,CA:FALSE
-keyUsage=critical,digitalSignature,keyEncipherment
-extendedKeyUsage=serverAuth
-subjectAltName=IP:{host},IP:127.0.0.1,DNS:localhost
-subjectKeyIdentifier=hash
-''')
+    private_write(server_conf, server_certificate_config(names))
     commands = [
         ['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '3',
          '-config', str(ca_conf), '-keyout', str(ca_key), '-out', str(ca_cert)],
@@ -100,6 +122,7 @@ subjectKeyIdentifier=hash
     token = secrets.token_urlsafe(48)
     origin = f'https://{host}:{port}'
     config = {'host': host, 'port': port, 'origin': origin, 'device_id': 'stackchan_k151',
+              'listen_host': '0.0.0.0' if host.lower().endswith('.local') else host, 'lan_ip_at_issue': address,
               'device_token': token, 'demo_password': secrets.token_urlsafe(32),
               'ca_certificate_file': str(ca_cert), 'server_certificate_file': str(server_cert),
               'server_private_key_file': str(server_key),
@@ -112,6 +135,46 @@ subjectKeyIdentifier=hash
         'ca_certificate_file': str(ca_cert), 'root_ca_pem': ca_cert.read_text(),
         'expected_simulated': False,
     })
+    return config_file
+
+
+def migrate_address(directory, host, lan_ip=None):
+    """Reissue only the server leaf; preserve the root CA and all credentials."""
+    directory = Path(directory).resolve()
+    config_file = directory / 'server-config.json'
+    config = json.loads(config_file.read_text())
+    device_file = directory / 'device-config.json'
+    device = json.loads(device_file.read_text())
+    names, address = certificate_names(host, lan_ip)
+    root_before = Path(config['ca_certificate_file']).read_bytes()
+    token_before = config['device_token']
+    private_json(directory / 'server-config.before-address-change.json', config)
+    private_json(directory / 'device-config.before-address-change.json', device)
+    private_write(directory / 'server.before-address-change.crt.pem', Path(config['server_certificate_file']).read_text())
+    conf = directory / 'server.cnf'
+    private_write(conf, server_certificate_config(names))
+    csr, leaf = directory / 'server.next.csr.pem', directory / 'server.next.crt.pem'
+    commands = [
+        ['openssl', 'req', '-new', '-key', config['server_private_key_file'], '-config', str(conf), '-out', str(csr)],
+        ['openssl', 'x509', '-req', '-in', str(csr), '-CA', config['ca_certificate_file'],
+         '-CAkey', str(directory / 'ca.key.pem'), '-set_serial', str(secrets.randbits(128)), '-days', '3',
+         '-extfile', str(conf), '-extensions', 'server', '-out', str(leaf)],
+        ['openssl', 'verify', '-CAfile', config['ca_certificate_file'], str(leaf)],
+    ]
+    previous_mask = os.umask(0o077)
+    try:
+        for command in commands:
+            subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        leaf.chmod(0o600)
+        os.replace(leaf, config['server_certificate_file'])
+    finally:
+        os.umask(previous_mask)
+    config.update(host=host, origin=f"https://{host}:{config['port']}", listen_host='0.0.0.0', lan_ip_at_issue=address)
+    device.update(host=host, url=f"wss://{host}:{config['port']}/device/v1/ws")
+    assert config['device_token'] == token_before and device['device_token'] == token_before
+    assert Path(config['ca_certificate_file']).read_bytes() == root_before
+    private_json(config_file, config)
+    private_json(device_file, device)
     return config_file
 
 
@@ -183,6 +246,14 @@ class HardwareHarness:
             address = None
         self.connection_events.append({'at_unix': round(time.time(), 3), 'stage': stage,
                                        'peer_ip': address, **fields})
+        event = self.connection_events[-1]
+        log_path = Path(self.config['state_file']).with_name('gateway-events.jsonl')
+        if log_path.exists() and log_path.stat().st_size > 1024 * 1024:
+            os.replace(log_path, log_path.with_name('gateway-events.previous.jsonl'))
+        fd = os.open(log_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(json.dumps(event, ensure_ascii=False) + '\n')
         self.connection_events = self.connection_events[-32:]
 
     async def observe_response(self, request, response):
@@ -192,7 +263,12 @@ class HardwareHarness:
     def transport_error(self, loop, context):
         error = context.get('exception')
         transport = context.get('transport')
-        peer = transport.get_extra_info('peername') if transport else None
+        # asyncio may already have detached a failed TLS transport's protocol.
+        # Diagnostics must still avoid falling back to raw exception output.
+        try:
+            peer = transport.get_extra_info('peername') if transport else None
+        except (AttributeError, RuntimeError, OSError):
+            peer = None
         if isinstance(error, ssl.SSLError):
             category = 'TLS_HANDSHAKE_FAILED'
             reason = getattr(error, 'reason', '')
@@ -214,7 +290,8 @@ class HardwareHarness:
         connection = self.hub.connection
         caps = connection.capabilities if connection else {}
         head = caps.get('head', {})
-        return {'host': self.config['host'], 'port': self.config['port'], 'pid': os.getpid(),
+        return {'host': self.config['host'], 'listen_host': self.config.get('listen_host', self.config['host']),
+                'port': self.config['port'], 'pid': os.getpid(),
                 'mode': self.config['model_mode'], 'motion_enabled': self.motion_enabled,
                 'device_connected': bool(connection and connection.online),
                 'connection_id': connection.id if connection else None,
@@ -228,7 +305,14 @@ class HardwareHarness:
                 'voice_events': self.voice_events, 'uptime_seconds': round(time.monotonic() - self.started)}
 
     async def persist(self):
+        previous_connection = None
         while True:
+            connection = self.hub.connection
+            current_id = connection.id if connection else None
+            if current_id != previous_connection:
+                self.observe('device_online' if current_id else 'device_offline', connection_id=current_id,
+                             simulated=connection.capabilities.get('simulated') if connection else None)
+                previous_connection = current_id
             private_json(self.config['state_file'], self.status())
             await asyncio.sleep(1)
 
@@ -383,7 +467,9 @@ class HardwareHarness:
         control = None
         persist = None
         try:
-            for host in {self.config['host'], '127.0.0.1'}:
+            bind = self.config.get('listen_host', self.config['host'])
+            hosts = {bind} if bind == '0.0.0.0' else {bind, '127.0.0.1'}
+            for host in hosts:
                 await web.TCPSite(runner, host, self.config['port'], ssl_context=tls).start()
             socket_path = Path(self.config['control_socket'])
             if socket_path.exists():
@@ -391,6 +477,8 @@ class HardwareHarness:
             control = await asyncio.start_unix_server(self.control, path=socket_path)
             socket_path.chmod(0o600)
             persist = asyncio.create_task(self.persist())
+            self.observe('gateway_started', host=self.config['host'], listen_host=bind, port=self.config['port'],
+                         model_mode=self.config['model_mode'], motion_enabled=False)
             print('Local TLS hardware gateway listening; motion gated; no model provider network.', flush=True)
             if install_signals:
                 for sig in (signal.SIGINT, signal.SIGTERM):
@@ -406,6 +494,7 @@ class HardwareHarness:
                 Path(self.config['control_socket']).unlink(missing_ok=True)
             await self.close_voice()
             await runner.cleanup()
+            self.observe('gateway_stopped')
             private_json(self.config['state_file'], {**self.status(), 'stopped': True})
             loop.set_debug(previous_debug)
             loop.set_exception_handler(previous_handler)
@@ -424,16 +513,21 @@ async def request_local(config, request):
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['init', 'serve', 'status', 'preflight', 'request'])
+    parser.add_argument('action', choices=['init', 'migrate-address', 'serve', 'status', 'preflight', 'request'])
     parser.add_argument('--directory', type=Path, default=DEFAULT_DIRECTORY)
-    parser.add_argument('--host', default='192.168.31.111')
+    parser.add_argument('--host', default='kirindeMacBook-Air.local')
+    parser.add_argument('--lan-ip')
     parser.add_argument('--port', type=int, default=8443)
     parser.add_argument('--request-file', type=Path)
     args = parser.parse_args()
     try:
         if args.action == 'init':
-            path = prepare(args.directory, args.host, args.port)
+            path = prepare(args.directory, args.host, args.port, args.lan_ip)
             print(json.dumps({'host': args.host, 'port': args.port, 'config_file': str(path)}))
+            return 0
+        if args.action == 'migrate-address':
+            path = migrate_address(args.directory, args.host, args.lan_ip)
+            print(json.dumps({'host': args.host, 'config_file': str(path)}))
             return 0
         config = json.loads((args.directory / 'server-config.json').read_text())
         if args.action == 'serve':
