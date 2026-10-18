@@ -7,6 +7,7 @@ import unittest
 from aiohttp import ClientSession, WSServerHandshakeError
 
 from gateway.config import Config
+from gateway.action_audit import target_summary
 from gateway.server import DEVICES
 from gateway.stackchan import DeviceError, PARAMETERS, QWEN_TOOLS, encode, schema_error, validate_frames
 from gateway.tool_calls import ToolCalls, ToolProtocolError
@@ -99,6 +100,20 @@ class DeviceFixture:
 
 
 class ContractTests(unittest.TestCase):
+    def test_target_summary_preserves_partial_axes_and_only_fixed_input_types(self):
+        secret = 'synthetic-private-screen-text'
+        summary = target_summary({'steps': [{'head': {'yaw_deg': 12},
+                                            'screen': {'page': 'text', 'text': secret}},
+                                           {'head': {'pitch_deg': -3}}]})
+        self.assertEqual(summary['steps_type'], 'array')
+        self.assertEqual(summary['steps'][0]['head'], {'yaw_deg': 12})
+        self.assertEqual(summary['steps'][1]['head'], {'pitch_deg': -3})
+        self.assertNotIn(secret, json.dumps(summary))
+        for steps, typename in (({}, 'object'), (secret, 'string'), (None, 'null'), (False, 'boolean')):
+            summary = target_summary({'steps': steps})
+            self.assertEqual(summary['steps_type'], typename)
+            self.assertNotIn(secret, json.dumps(summary))
+
     def test_schema_diagnostics_identify_fields_without_rejected_content(self):
         secret = 'synthetic-private-screen-text'
         cases = [({**SCENE, 'duration_ms': secret}, 'type', '$.duration_ms'),
@@ -111,6 +126,8 @@ class ContractTests(unittest.TestCase):
                 self.assertEqual(result['error_code'], 'INVALID_ARGUMENT')
                 self.assertEqual(result['details']['reason'], reason)
                 self.assertEqual(result['details']['field'], field)
+                if reason == 'type':
+                    self.assertEqual(result['details']['received_type'], 'string')
                 self.assertNotIn(secret, json.dumps(result))
 
     def test_cross_field_invalid_argument_identifies_frame_and_order(self):
@@ -192,7 +209,8 @@ class ContractTests(unittest.TestCase):
         for text in ('stackchan_perform_targets', 'return_to_neutral=true', '不计算速度', '20个中文字符', '不可猜成锁定'):
             self.assertIn(text, tools['instructions'])
         for text in ('定向看/转向默认保持最终目标', '明确设置return_to_neutral=false',
-                     'hold_ms结束不意味着恢复', '允许自由选择上下文恰当的头部姿态配合表情与灯光'):
+                     'hold_ms结束不意味着恢复', '允许自由选择上下文恰当的头部姿态配合表情与灯光',
+                     '微笑用happy，大笑用laughing', '明确展示表情时留足观察时间', '不要每次主动追加neutral'):
             self.assertIn(text, tools['instructions'])
         self.assertNotIn('仅表情或灯光不得添加head', tools['instructions'])
         self.assertNotIn('未要求改变的输出不要擅自改动', tools['instructions'])
@@ -332,6 +350,100 @@ class DeviceGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record['effective_args'], command['args'])
         self.assertNotIn('at_ms', record['requested_summary']['steps'][0])
         self.assertEqual(record['action_summary']['head_frames'][-1]['yaw_deg'], 0)
+
+    async def test_target_single_step_object_normalizes_before_schema_and_keeps_fresh_other_axis(self):
+        self.device.pose = {'yaw_deg': 11, 'pitch_deg': 7}
+        args = {'steps': {'head': {'yaw_deg': -9}}}
+        saved = copy.deepcopy(args)
+        object.__setattr__(self.h.cfg, 'stackchan_audit_enabled', True)
+        with self.assertLogs('gateway.stackchan', level='WARNING') as audit:
+            result = await self.control.execute('stackchan_perform_targets', args)
+        self.assertEqual(result['status'], 'accepted')
+        command = next(e for e in self.device.events if e['type'] == 'command.execute')
+        head = command['args']['frames'][0]['head']
+        self.assertEqual((head['yaw_deg'], head['pitch_deg']), (-9, 7))
+        record = self.hub.records[result['command_id']]
+        self.assertEqual(record['effective_args'], command['args'])
+        self.assertEqual(record['requested_summary']['steps'][0]['head'], {'yaw_deg': -9})
+        self.assertTrue(result['input_normalized'])
+        self.assertEqual(result['normalizations'], ['single_step_to_array'])
+        self.assertEqual(result['received_steps_type'], 'object')
+        self.assertEqual(result['inherited_axes'], [{'step_index': 0, 'axes': ['pitch_deg'], 'source': 'measured_pose'}])
+        entries = [json.loads(line.split('s2s_action_audit ', 1)[1]) for line in audit.output]
+        entry = next(e for e in entries if e['stage'] == 'perform_result')
+        self.assertEqual(entry['received_summary']['steps_type'], 'object')
+        self.assertEqual(entry['requested_summary']['steps_type'], 'array')
+        with self.assertLogs('gateway.stackchan', level='WARNING') as terminal_audit:
+            await self.device.status(command, 'completed')
+            await until(lambda: record['status'] == 'completed')
+        terminal = json.loads(terminal_audit.output[0].split('s2s_action_audit ', 1)[1])
+        self.assertEqual(terminal['inherited_axes'], result['inherited_axes'])
+        self.assertEqual(terminal['received_steps_type'], 'object')
+        queried = await self.control.execute('stackchan_get_command', {'command_id': result['command_id']})
+        self.assertEqual(queried['status'], 'completed')
+        self.assertEqual(queried['inherited_axes'], result['inherited_axes'])
+        self.assertTrue(queried['input_normalized'])
+        self.assertEqual(args, saved)
+
+    async def test_target_json_single_step_decodes_once_without_coercing_unknown_fields(self):
+        args = {'steps': '{"head":{"pitch_deg":3}}'}
+        result = await self.control.execute('stackchan_perform_targets', args)
+        self.assertEqual(result['status'], 'accepted')
+        self.assertEqual(result['normalizations'], ['decode_steps_json_once', 'single_step_to_array'])
+        self.assertEqual(result['received_steps_type'], 'string')
+        await self.control.execute('stackchan_stop', {})
+        result = await self.control.execute('stackchan_perform_targets', {
+            'steps': '{"head":{"pitch_deg":3},"secret-unknown-field":"private-content"}'})
+        self.assertEqual(result['error_code'], 'INVALID_ARGUMENT')
+        self.assertNotIn('private-content', json.dumps(result))
+        self.assertEqual(sum(e['type'] == 'command.execute' for e in self.device.events), 1)
+
+    async def test_target_json_array_and_partial_axes_inherit_previous_then_explicit_neutral(self):
+        self.device.pose = {'yaw_deg': 6, 'pitch_deg': -4}
+        steps = [{'head': {'yaw_deg': 10}}, {'head': {'pitch_deg': 2}}, {'head': {'yaw_deg': -2}}]
+        args = {'steps': json.dumps(steps), 'return_to_neutral': True}
+        result = await self.control.execute('stackchan_perform_targets', args)
+        self.assertEqual(result['status'], 'accepted')
+        command = next(e for e in self.device.events if e['type'] == 'command.execute')
+        heads = [f['head'] for f in command['args']['frames']]
+        self.assertEqual([(h['yaw_deg'], h['pitch_deg']) for h in heads],
+                         [(10, -4), (10, 2), (-2, 2), (0, 0)])
+        self.assertTrue(result['neutral_frame_added'])
+        self.assertEqual(len([e for e in self.device.events if e['type'] == 'command.execute']), 1)
+
+    async def test_target_format_adaptation_rejects_ambiguous_shapes_and_bad_types_atomically(self):
+        secret = 'synthetic-private-screen-text'
+        invalid_steps = [
+            True, None, [True], {}, {'head': {}},
+            {'0': {'head': {'yaw_deg': 1}}},
+            json.dumps(json.dumps([{'head': {'yaw_deg': 1}}])),
+            '[{"head":{"yaw_deg":1,"yaw_deg":2}}]',
+            '[{"head":{"yaw_deg":NaN}}]',
+            '[{"head":{"yaw_deg":1e400}}]',
+            [{'head': {'yaw_deg': True}}], [{'head': {'yaw_deg': '1'}}],
+            [{'head': {'yaw_deg': 1}, secret: secret}],
+            [{'screen': {'page': 'text', 'text': secret}, 'head': {}}],
+        ]
+        for steps in invalid_steps:
+            with self.subTest(steps_type=type(steps).__name__):
+                result = await self.control.execute('stackchan_perform_targets', {'steps': steps})
+                self.assertEqual(result['error_code'], 'INVALID_ARGUMENT')
+                self.assertNotIn(secret, json.dumps(result))
+        self.assertFalse(self.hub.records)
+        self.assertFalse(any(e['type'] == 'command.execute' for e in self.device.events))
+
+    async def test_partial_target_still_needs_fresh_pose_and_checks_inherited_test_limit(self):
+        self.device.query_enabled = False
+        args = {'steps': [{'head': {'yaw_deg': 1}}]}
+        result = await self.control.execute('stackchan_perform_targets', args)
+        self.assertEqual(result['error_code'], 'NOT_READY')
+        self.assertEqual(result['details']['reason'], 'fresh_pose_unavailable')
+        self.device.query_enabled = True
+        self.device.pose = {'yaw_deg': 0, 'pitch_deg': 4}
+        object.__setattr__(self.h.cfg, 'stackchan_test_max_deg', 3)
+        result = await self.control.execute('stackchan_perform_targets', args)
+        self.assertEqual(result['error_code'], 'OUT_OF_RANGE')
+        self.assertFalse(any(e['type'] == 'command.execute' for e in self.device.events))
 
     async def test_free_targets_long_leg_inserts_collinear_frames_in_one_command(self):
         self.device.capabilities['head']['max_speed_deg_s'] = 30
@@ -762,6 +874,14 @@ class ToolCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         await self.tools.responses['r1'].task
         result = json.loads(self.output[0]['item']['output'])
         self.assertEqual(result, {'ok': False, 'error_code': 'INVALID_ARGUMENT', 'simulated': True})
+        self.assertFalse(self.control.calls)
+
+    async def test_duplicate_argument_keys_reject_before_device_execution(self):
+        self.response([('stackchan_perform_targets',
+                        '{"steps":[{"head":{"yaw_deg":1,"yaw_deg":2}}]}')])
+        await self.tools.responses['r1'].task
+        result = json.loads(self.output[0]['item']['output'])
+        self.assertEqual(result['error_code'], 'INVALID_ARGUMENT')
         self.assertFalse(self.control.calls)
 
     async def test_speech_state_and_new_response_prevent_extra_continuation(self):

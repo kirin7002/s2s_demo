@@ -5,7 +5,7 @@
 
 协议源为 StackChan Wall-E 仓库的 `docs/control-protocol.md`，能力源为 `protocol/tools.json`，
 设备命令为 `protocol/command.schema.json`；Qwen声明由同一能力源转换，不另行定义一套动作语义。
-本机仓库为 `/Users/kirin/Documents/ChatGPT/stackchan-wall-e`，当前工具目录0.3.0。
+本机仓库为 `/Users/kirin/Documents/ChatGPT/stackchan-wall-e`，当前工具目录0.4.0。
 对方契约检查数量不是S2S端测试结果；自由目标真实模型/真机组合结果见文末。
 
 - 设备以STA Wi-Fi主动建立到现有网关的WSS连接。设备路由放在现有Python进程，首版原生Function Calling，MCP后续复用目录。
@@ -13,6 +13,10 @@
   完整目录另保留`stackchan_perform`兼容路由。自由目标工具只接收steps、pace及return_to_neutral，
   不让模型填写时间轴；代码计算预算、共线中间目标与显式0/0回正，设备继续做20ms插值。
   设备由授权语音会话绑定，模型参数不接受设备ID或凭据。
+  目标调用边界仅适配两种明确格式：单个step对象包装成数组，或严格JSON数组/单step对象字符串解码一层。
+  随后仍按目标schema校验，未知字段、重复JSON键、非有限数字和其他形状均拒绝；不解析Python表达式。
+  head至少明确一个轴，缺轴从新鲜实际姿态或上一目标继承，不补0；显式回正仍是0/0。
+  原始类型与请求/实际wire目标分别审计，不记录屏幕文字；格式适配不会重试设备动作。
 - wire最多16帧、每段move最多4000ms、总时长100–8000ms，均包含边界；超限整体拒绝，不裁剪或拆成多个命令。
   低层`perform`缺省auto仅延长不足预算、顺延后帧/总时长，保留目标/输出/非负停顿；strict原样严格校验。
   编译后仍验证原wire schema和实际完整UTF-8字节数，记录requested/effective安全摘要，终态关联effective命令。

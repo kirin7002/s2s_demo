@@ -4,10 +4,18 @@ import math
 EXPRESSIONS = {'neutral', 'happy', 'laughing', 'scared', 'sad', 'surprised', 'thinking'}
 
 
+def json_type(value):
+    """Only fixed JSON type names, never values or Python class names."""
+    return {type(None): 'null', bool: 'boolean', int: 'integer', float: 'number',
+            str: 'string', list: 'array', dict: 'object'}.get(type(value), 'unknown')
+
+
 def target_summary(arguments):
     """Requested free targets, with no invented clocks and no screen text."""
+    arguments_type = json_type(arguments)
     arguments = arguments if isinstance(arguments, dict) else {}
     steps = arguments.get('steps', [])
+    steps_type = json_type(steps) if 'steps' in arguments else 'missing'
     steps = steps if isinstance(steps, list) else []
     safe = []
     def finite(value):
@@ -17,8 +25,10 @@ def target_summary(arguments):
             continue
         item = {'step_index': index}
         head, screen, light = step.get('head'), step.get('screen'), step.get('light')
-        if isinstance(head, dict) and all(finite(head.get(k)) for k in ('yaw_deg', 'pitch_deg')):
-            item['head'] = {k: head[k] for k in ('yaw_deg', 'pitch_deg')}
+        if isinstance(head, dict):
+            axes = {k: head[k] for k in ('yaw_deg', 'pitch_deg') if finite(head.get(k))}
+            if axes:
+                item['head'] = axes
         if isinstance(screen, dict) and screen.get('page') in ('face', 'text'):
             item['screen'] = {'page': screen['page']}
             if isinstance(screen.get('expression'), str) and screen['expression'] in EXPRESSIONS:
@@ -29,7 +39,7 @@ def target_summary(arguments):
         if finite(step.get('hold_ms')):
             item['hold_ms'] = step['hold_ms']
         safe.append(item)
-    return {'step_count': len(steps), 'steps': safe,
+    return {'arguments_type': arguments_type, 'steps_type': steps_type, 'step_count': len(steps), 'steps': safe,
             **({'pace': arguments['pace']} if arguments.get('pace') in ('gentle', 'normal', 'brisk') else {}),
             **({'return_to_neutral': arguments['return_to_neutral']}
                if type(arguments.get('return_to_neutral')) is bool else {})}

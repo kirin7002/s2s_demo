@@ -14,9 +14,10 @@ import time
 
 from aiohttp import WSMsgType, web
 from jsonschema import Draft7Validator
-from .action_audit import action_summary, target_summary
+from .action_audit import action_summary, json_type, target_summary
 from .timing_planner import plan_timing, TimingPlanError
 from .target_planner import compile_targets
+from .target_input import normalize_target_input
 
 LOGGER = logging.getLogger(__name__)
 
@@ -32,7 +33,8 @@ STATUSES = TERMINAL | {'accepted', 'running'}
 MOTION_FAULTS = {'MOTION_TIMEOUT', 'SCHEDULER_OVERRUN', 'HARDWARE_ERROR'}
 TIMING_FIELDS = ('timing_mode', 'timing_adjusted', 'requested_duration_ms', 'effective_duration_ms', 'frame_timing',
                  'source_tool', 'planning_mode', 'pace', 'planned_speed_deg_s', 'input_steps', 'generated_frames',
-                 'return_to_neutral', 'neutral_frame_added', 'step_frames')
+                 'return_to_neutral', 'neutral_frame_added', 'step_frames', 'inherited_axes',
+                 'input_normalized', 'normalizations', 'received_steps_type', 'normalized_steps_type')
 
 
 class DeviceError(Exception):
@@ -100,6 +102,7 @@ def schema_details(error):
                                      if path[i] == 'steps' and type(path[i + 1]) is int), None)
     if error.validator == 'type':
         details['expected_type'] = error.validator_value
+        details['received_type'] = json_type(error.instance)
     elif error.validator == 'required' and isinstance(error.instance, dict):
         details['missing_fields'] = [name for name in error.validator_value
                                      if name in known and name not in error.instance]
@@ -449,7 +452,9 @@ class Control:
             requested_summary = target_summary(arguments) if name == 'stackchan_perform_targets' else action_summary(arguments)
             effective_summary = record.get('action_summary') if record else None
             LOGGER.warning('s2s_action_audit %s', json.dumps({'stage': 'perform_result',
-                'requested_summary': requested_summary, 'effective_summary': effective_summary,
+                'received_summary': requested_summary,
+                'requested_summary': record.get('requested_summary', requested_summary) if record else requested_summary,
+                'effective_summary': effective_summary,
                 'summary': effective_summary if effective_summary is not None else requested_summary,
                 **{key: result[key] for key in (
                     'command_id', 'status', 'error_code', 'details', 'fresh', 'simulated', *TIMING_FIELDS) if key in result}},
@@ -463,6 +468,12 @@ class Control:
             validator = PARAMETERS.get(name)
             if validator is None:
                 raise DeviceError('UNKNOWN_TOOL')
+            normalization = {}
+            if name == 'stackchan_perform_targets':
+                try:
+                    arguments, normalization = normalize_target_input(arguments)
+                except TimingPlanError as error:
+                    raise DeviceError(error.code, details=error.details) from None
             errors = list(validator.iter_errors(arguments))
             if errors:
                 raise schema_error(errors) if name in ('stackchan_perform', 'stackchan_perform_targets') else DeviceError(
@@ -526,7 +537,7 @@ class Control:
             if target_limit is not None and any(
                     abs(item['head'][axis]) > target_limit
                     for item in items if 'head' in item
-                    for axis in ('yaw_deg', 'pitch_deg')):
+                    for axis in ('yaw_deg', 'pitch_deg') if axis in item['head']):
                 raise DeviceError('OUT_OF_RANGE')
             connection = await self.ensure()
             generation = self.generation
@@ -549,6 +560,7 @@ class Control:
                     effective, timing = plan_timing(arguments, connection.capabilities, initial_pose=pose)
             except TimingPlanError as error:
                 raise DeviceError(error.code, details=error.details) from None
+            timing.update(normalization)
             timing['source_tool'] = name
             validate_frames(effective, connection.capabilities, initial_pose=pose)
             if target_limit is not None and any(abs(item['head'][axis]) > target_limit

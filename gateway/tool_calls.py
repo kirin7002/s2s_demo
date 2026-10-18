@@ -7,6 +7,16 @@ class ToolProtocolError(Exception):
     pass
 
 
+def unique_json_object(pairs):
+    """Reject ambiguous repeated keys before the parsed object loses them."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('Duplicate JSON key')
+        result[key] = value
+    return result
+
+
 @dataclass
 class Response:
     id: str
@@ -146,7 +156,8 @@ class ToolCalls:
                         return
                     call['state'] = 'executing'
                     try:
-                        arguments = json.loads(call['arguments'], parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+                        arguments = json.loads(call['arguments'], object_pairs_hook=unique_json_object,
+                                               parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
                         result = await self.control.execute(call['name'], arguments)
                     except (ValueError, TypeError, RecursionError):
                         result = {'ok': False, 'error_code': 'INVALID_ARGUMENT', 'simulated': self.control.simulated}

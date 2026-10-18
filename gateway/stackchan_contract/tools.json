@@ -1,5 +1,5 @@
 {
-  "contract_version": "0.3.0",
+  "contract_version": "0.4.0",
   "status": "design",
   "tools": [
     {
@@ -14,7 +14,7 @@
     },
     {
       "name": "stackchan_perform_targets",
-      "description": "Execute freely chosen target keyframes. Prefer this for normal robot interaction instead of calculating frame timestamps. Choose arbitrary absolute head poses, expressions, lights and their order; there are no fixed nod/shake templates. The gateway derives timing and intermediate waypoints from the fresh measured pose and device capabilities; the firmware interpolates the movement. All channels within a step begin together. hold_ms means a pause after settling. For a nod choose different pitch targets; for a shake choose left and right yaw targets. Set return_to_neutral=true when the user asks to finish facing forward; code targets calibrated yaw=0,pitch=0 rather than copying a measured offset. Mechanical limits and total command bounds remain enforced; infeasible plans are atomically rejected, never clipped. Returns the effective plan and accepted acknowledgement; use stackchan_get_command to confirm completion. Directional look/turn requests end at and retain the requested pose: explicitly use return_to_neutral=false and do not append a zero-pose step unless the user asks to return. hold_ms is a minimum pause, not a timeout that restores neutral. Expressions and lights may be accompanied by context-appropriate head poses chosen by the agent. Do not automatically append a neutral pose to these expressive combinations.",
+      "description": "Execute freely chosen target keyframes. Prefer this for normal robot interaction instead of calculating frame timestamps. Choose arbitrary absolute head poses, expressions, lights and their order; there are no fixed nod/shake templates. The gateway derives timing and intermediate waypoints from the fresh measured pose and device capabilities; the firmware interpolates the movement. All channels within a step begin together. hold_ms means a pause after settling. For a nod choose different pitch targets; for a shake choose left and right yaw targets. Set return_to_neutral=true when the user asks to finish facing forward; code targets calibrated yaw=0,pitch=0 rather than copying a measured offset. Mechanical limits and total command bounds remain enforced; infeasible plans are atomically rejected, never clipped. Returns the effective plan and accepted acknowledgement; use stackchan_get_command to confirm completion. Directional look/turn requests end at and retain the requested pose: explicitly use return_to_neutral=false and do not append a zero-pose step unless the user asks to return. hold_ms is a minimum pause, not a timeout that restores neutral. Expressions and lights may be accompanied by context-appropriate head poses chosen by the agent. Do not automatically append a neutral pose to these expressive combinations. A head target may specify one axis only; code carries forward the other from the preceding target or fresh starting pose, never substitutes zero.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -32,21 +32,29 @@
                       "type": "number",
                       "minimum": -60,
                       "maximum": 60,
-                      "description": "Absolute target yaw in calibrated coordinates. A shake needs distinct left and right yaw targets, then return to 0; do not copy the measured current pose into every frame."
+                      "description": "Absolute yaw goal. Omit to preserve the previous yaw target or initially measured yaw."
                     },
                     "pitch_deg": {
                       "type": "number",
                       "minimum": -25,
                       "maximum": 25,
-                      "description": "Absolute target pitch in calibrated coordinates. A nod needs a visibly changed pitch target and a return to 0. Current measured pose is the starting point for timing, not all future targets."
+                      "description": "Absolute pitch goal. Omit to preserve the previous pitch target or initially measured pitch."
                     }
                   },
-                  "required": [
-                    "yaw_deg",
-                    "pitch_deg"
-                  ],
                   "additionalProperties": false,
-                  "description": "Free absolute target pose, not a gesture preset. The gateway computes travel time and the device interpolates intermediate positions."
+                  "description": "Free absolute target pose. Provide yaw_deg, pitch_deg, or both. An omitted axis keeps its value from the preceding head target, or the fresh measured starting pose for the first head target. Omission never means zero. At least one axis is required.",
+                  "anyOf": [
+                    {
+                      "required": [
+                        "yaw_deg"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "pitch_deg"
+                      ]
+                    }
+                  ]
                 },
                 "screen": {
                   "type": "object",
@@ -165,7 +173,8 @@
                   ]
                 }
               ]
-            }
+            },
+            "description": "JSON array of target step objects, including for a single step. Do not encode the array as a string."
           },
           "pace": {
             "type": "string",

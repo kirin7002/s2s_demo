@@ -52,7 +52,7 @@ def compile_targets(arguments, capabilities, initial_pose=None):
             if neutral and not bounds[axis][0] <= 0 <= bounds[axis][1]:
                 raise TimingPlanError('OUT_OF_RANGE', reason='neutral_outside_range', axis=axis)
 
-    frames, mapping, cursor = [], [], 0
+    frames, mapping, inherited_axes, cursor = [], [], [], 0
 
     def append_step(step, index):
         nonlocal previous, cursor
@@ -62,7 +62,15 @@ def compile_targets(arguments, capabilities, initial_pose=None):
         target = step.get('head')
         start = copy.deepcopy(previous)
         segments = 1
-        if target is not None:
+        if 'head' in step:
+            if (not isinstance(target, dict) or not target or
+                    any(k not in ('yaw_deg', 'pitch_deg') for k in target)):
+                raise TimingPlanError('INVALID_ARGUMENT', reason='head_axes', step_index=index)
+            missing = [k for k in ('yaw_deg', 'pitch_deg') if k not in target]
+            if missing:
+                inherited_axes.append({'step_index': index, 'axes': missing,
+                                       'source': 'previous_target' if any('head' in f for f in frames) else 'measured_pose'})
+            target = {k: target[k] if k in target else previous[k] for k in ('yaw_deg', 'pitch_deg')}
             for axis in ('yaw_deg', 'pitch_deg'):
                 value = target.get(axis)
                 if type(value) not in (int, float) or not math.isfinite(value):
@@ -113,6 +121,7 @@ def compile_targets(arguments, capabilities, initial_pose=None):
                 'input_steps': len(steps), 'generated_frames': len(frames),
                 'effective_duration_ms': cursor, 'return_to_neutral': neutral,
                 'neutral_frame_added': neutral_added, 'step_frames': mapping,
+                'inherited_axes': inherited_axes,
                 'frame_timing': [{'frame_index': i, 'at_ms': f['at_ms'],
                                   **({'move_ms': f['head']['move_ms']} if 'head' in f else {})}
                                  for i, f in enumerate(frames)]}
