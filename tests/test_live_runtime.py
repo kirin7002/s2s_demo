@@ -37,7 +37,7 @@ class LiveRuntimeTests(unittest.IsolatedAsyncioTestCase):
         hardware = {'origin': 'https://Mixed-Host.local:8443', 'port': 8443,
                     'device_id': 'fixture', 'device_token': 'synthetic-device-token-' * 3}
         with patch('scripts.serve_s2s_tls.Config.from_env', return_value=config):
-            self.runtime = Runtime(hardware, self.directory, read_only=True)
+            self.runtime = Runtime(hardware, self.directory)
 
     async def asyncTearDown(self):
         await self.runtime.hub.close()
@@ -45,30 +45,31 @@ class LiveRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_startup_uses_root_login_but_no_provider_connection(self):
         self.assertEqual(self.runtime.config.origin, 'https://mixed-host.local:8443')
-        self.assertTrue(self.runtime.config.stackchan_read_only)
-        self.assertEqual(self.runtime.config.stackchan_test_max_deg, 3)
+        self.assertFalse(self.runtime.config.stackchan_read_only)
+        self.assertIsNone(self.runtime.config.stackchan_test_max_deg)
+        self.assertEqual(self.runtime.config.max_seconds, 600)
+        self.assertEqual(self.runtime.config.idle_seconds, 60)
+        self.assertEqual(self.runtime.config.max_sessions, 2)
         self.assertEqual(self.runtime.status()['provider_connection_attempts'], 0)
         self.assertEqual(self.runtime.status()['active_sessions'], 0)
 
-    async def test_tool_failure_closes_provider_without_continuation_or_retry(self):
+    async def test_tool_failure_is_returned_under_normal_coordinator_policy(self):
         socket = Socket()
         tracked = TrackedProvider(socket, self.runtime)
-        with self.assertRaises(RuntimeError):
-            await tracked.send_json({'type': 'conversation.item.create', 'item': {
-                'type': 'function_call_output', 'call_id': 'fixture',
-                'output': json.dumps({'ok': False, 'error_code': 'MOTION_TIMEOUT', 'simulated': False})}})
-        self.assertTrue(socket.closed)
-        self.assertFalse(socket.sent)
+        await tracked.send_json({'type': 'conversation.item.create', 'item': {
+            'type': 'function_call_output', 'call_id': 'fixture',
+            'output': json.dumps({'ok': False, 'error_code': 'MOTION_TIMEOUT', 'simulated': False})}})
+        self.assertFalse(socket.closed)
+        self.assertEqual(len(socket.sent), 1)
 
-    async def test_tool_budget_stops_before_a_ninth_call_can_execute(self):
+    async def test_temporary_eight_call_budget_removed(self):
         socket = Socket({'type': 'response.function_call_arguments.done', 'name': 'stackchan_get_state',
                          'call_id': 'fixture', 'arguments': '{}'})
         tracked = TrackedProvider(socket, self.runtime)
-        for _ in range(8):
+        for _ in range(9):
             await tracked.receive()
-        with self.assertRaises(RuntimeError):
-            await tracked.receive()
-        self.assertTrue(socket.closed)
+        self.assertFalse(socket.closed)
+        self.assertEqual(len(tracked.calls), 9)
 
     async def test_audit_omits_audio_transcript_and_secrets(self):
         socket = Socket({'type': 'response.audio_transcript.delta', 'delta': 'synthetic-private-text'})

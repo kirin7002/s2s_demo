@@ -50,9 +50,6 @@ class TrackedProvider:
             if isinstance(kind, str) and re.fullmatch(r'[a-z_.]{1,90}', kind):
                 self.events[kind] += 1
             if kind == 'response.function_call_arguments.done':
-                if len(self.calls) >= 8:
-                    await self.socket.close()
-                    raise RuntimeError('Live test tool budget exhausted')
                 name = event.get('name')
                 args = event.get('arguments', '')
                 self.calls.append({'name': name if name in {
@@ -75,17 +72,12 @@ class TrackedProvider:
     async def send_json(self, event):
         kind = event.get('type')
         self.sent[kind] += 1
-        if kind == 'response.create' and self.sent[kind] > 6:
-            raise RuntimeError('Live test generation budget exhausted')
         if kind == 'conversation.item.create' and event.get('item', {}).get('type') == 'function_call_output':
             item = event['item']
             value = json.loads(item['output'])
             self.outputs.append({'call_id': item['call_id'], **{key: value[key] for key in (
                 'ok', 'status', 'command_id', 'error_code', 'online', 'fresh', 'age_ms', 'simulated', 'state'
             ) if key in value}})
-            if value.get('ok') is False or value.get('status') in {'failed', 'rejected', 'unknown'}:
-                await self.socket.close()
-                raise RuntimeError('Live tool failed; stop without another model turn')
         await self.socket.send_json(event)
 
     async def close(self):
@@ -99,7 +91,7 @@ class TrackedProvider:
 
 
 class Runtime:
-    def __init__(self, hardware, directory, read_only=False):
+    def __init__(self, hardware, directory):
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.directory.chmod(0o700)
@@ -107,8 +99,8 @@ class Runtime:
         base = Config.from_env()
         self.config = replace(base, live_enabled=True, origin=hardware['origin'].lower(),
             stackchan_enabled=True, stackchan_device_id=hardware['device_id'],
-            stackchan_device_token=hardware['device_token'], stackchan_read_only=read_only,
-            stackchan_test_max_deg=3, max_sessions=1, max_seconds=90, idle_seconds=30)
+            stackchan_device_token=hardware['device_token'], stackchan_read_only=False,
+            stackchan_test_max_deg=None)
         self.config = replace(self.config, stackchan_audit_enabled=True)
         if self.config.problem():
             raise ValueError('Real-provider root configuration unavailable')
@@ -144,7 +136,9 @@ class Runtime:
             'simulated': connection.capabilities.get('simulated') if connection else None,
             'capabilities': connection.capabilities if connection else {},
             'active_sessions': len(self.app[ACTIVE]), 'control_session_active': self.hub.control is not None,
-            'read_only': self.config.stackchan_read_only, 'max_head_target_deg': 3,
+            'read_only': self.config.stackchan_read_only, 'max_head_target_deg': self.config.stackchan_test_max_deg,
+            'max_sessions': self.config.max_sessions, 'max_seconds': self.config.max_seconds,
+            'idle_seconds': self.config.idle_seconds,
             'provider_connection_attempts': self.attempts,
             'latest_tool_call_names': [c['name'] for c in self.providers[-1].calls] if self.providers else [],
             'latest_tool_output_count': len(self.providers[-1].outputs) if self.providers else 0,
@@ -226,10 +220,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--directory', type=Path, default=DEFAULT_DIRECTORY)
     parser.add_argument('--hardware-config', type=Path, default=ROOT / '.run/stackchan-hardware/server-config.json')
-    parser.add_argument('--read-only', action='store_true')
     args = parser.parse_args()
     hardware = json.loads(args.hardware_config.read_text())
-    asyncio.run(Runtime(hardware, args.directory, args.read_only).serve())
+    asyncio.run(Runtime(hardware, args.directory).serve())
 
 
 if __name__ == '__main__':

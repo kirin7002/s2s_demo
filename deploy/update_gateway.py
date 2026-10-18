@@ -22,7 +22,7 @@ def verified_manifest(release):
     for name, digest in manifest['files'].items():
         path = Path(name)
         if path.is_absolute() or '..' in path.parts or path.parts[0] not in {
-                'gateway', 'web', 'wheelhouse', 'requirements.txt'}:
+                'gateway', 'web', 'wheelhouse', 'requirements.txt', 'public-isrg-root-x1.pem'}:
             raise UpdateError('Unexpected release file')
         target = release / path
         if target.is_symlink() or not target.is_file() or hashlib.sha256(target.read_bytes()).hexdigest() != digest:
@@ -128,16 +128,19 @@ def main():
             or values.get('QWEN_MODEL') != 'qwen-audio-3.0-realtime-flash'):
         raise UpdateError('Existing server configuration differs; no secrets changed')
     device_file = Path('/home/kirin/apps/s2s_demo/shared/stackchan-device-config.json')
+    if not device_file.exists():
+        raise UpdateError('Provision the already approved private device config on server first; no token was generated or changed')
     if device_file.stat().st_mode & 0o077:
         raise UpdateError('Device config must be private')
     device = json.loads(device_file.read_text())
     if (device.get('host') != 's2s.kirinxu.cn' or device.get('port') != 443
             or not re.fullmatch(r'[A-Za-z0-9_-]{32,256}', device.get('device_token', ''))
-            or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', device.get('device_id', ''))):
+            or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', device.get('device_id', ''))
+            or device.get('root_ca_pem', '').strip() != (release / 'public-isrg-root-x1.pem').read_text().strip()):
         raise UpdateError('Unexpected device connection config')
+    values.pop('S2S_STACKCHAN_TEST_MAX_DEG', None)
     values.update(S2S_STACKCHAN_ENABLED='1', S2S_STACKCHAN_DEVICE_ID=device['device_id'],
-                  S2S_STACKCHAN_DEVICE_TOKEN=device['device_token'], S2S_STACKCHAN_TEST_MAX_DEG='3',
-                  S2S_STACKCHAN_AUDIT='1')
+                  S2S_STACKCHAN_DEVICE_TOKEN=device['device_token'], S2S_STACKCHAN_AUDIT='1')
     image = 's2s-demo:gateway-' + revision[:12]
     with tempfile.TemporaryDirectory(prefix='s2s-gateway-build-') as directory:
         context = Path(directory)
@@ -160,7 +163,7 @@ USER app
            'from gateway.server import create_app; from gateway.stackchan import QWEN_TOOLS; assert len(QWEN_TOOLS)==4')
     health_code = '''import json,time,urllib.request,urllib.error
 from gateway.config import Config
-c=Config.from_env();assert c.stackchan_configured and c.stackchan_test_max_deg==3
+c=Config.from_env();assert c.stackchan_configured and c.stackchan_test_max_deg is None
 opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
 for attempt in range(30):
  try:
@@ -179,6 +182,7 @@ for attempt in range(30):
     print('DEPLOYED_GATEWAY_REVISION=' + revision)
     print('ROLLBACK_CONTAINER=' + backup)
     print('login_model_and_device_auth_verified=true')
+    print('DEVICE_CONFIG_PATH=' + str(device_file))
     print('No proxy/firewall changes or model/audio/device execution performed.')
 
 
