@@ -150,10 +150,25 @@ class MotionSuite:
     async def interrupt_motion(self):
         arguments = {'duration_ms': 5500, 'frames': [frame(0, 3, 0, move=1600),
                                                      frame(3000, -3, 0, 'scared', move=1600)]}
+        count = (await self.rpc('status'))['voice_events'].get('interrupted', 0)
+        baseline = await self.pose('motion_baseline_before_command')
         command, started = await self.execute(arguments, 'interrupt_motion_cancel_future_frame')
         await self.until(started + .6)
-        before = await self.pose('motion_before_interrupt')
-        count = (await self.rpc('status'))['voice_events'].get('interrupted', 0)
+        observation_deadline = started + 1.2
+        while True:
+            before = await self.pose('motion_before_interrupt')
+            observed_change = max(abs(before[axis] - baseline[axis]) for axis in baseline)
+            observed_at = time.monotonic()
+            if observed_change >= .25 or observed_at >= observation_deadline:
+                break
+            await asyncio.sleep(min(.08, observation_deadline - observed_at))
+        observation = {'baseline': baseline, 'before_interrupt': before,
+                       'observed_change_deg': observed_change,
+                       'observed_elapsed_ms': (observed_at - started) * 1000,
+                       'minimum_change_deg': .25, 'latest_observation_ms': 1200}
+        self.report['interrupt_motion_observation'] = observation
+        require(observed_change >= .25 and observed_at <= observation_deadline,
+                'MOTION_IN_PROGRESS_UNVERIFIED', observation)
         await self.rpc('interrupt')
         deadline = time.monotonic() + 4
         while (await self.rpc('status'))['voice_events'].get('interrupted', 0) <= count:
@@ -173,6 +188,7 @@ class MotionSuite:
         require(all(abs(later[axis] - stopped[axis]) <= self.tolerance for axis in later),
                 'CANCELLED_FRAME_APPLIED_OR_FEEDBACK_DRIFT', {'stopped': stopped, 'later': later})
         self.report['stages'].append({'name': 'interrupt_motion_cancel_future_frame', 'passed': True,
+                                      'movement_observation': observation,
                                       'before_stop': before, 'stopped': stopped, 'later': later,
                                       'queued_frame_at_ms': 3000, 'result': result})
         self.save()

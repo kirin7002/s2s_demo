@@ -22,7 +22,18 @@
 私密配置、临时CA/服务器私钥及状态仅在已忽略的`.run/stackchan-hardware/`，目录0700、文件0600；
 固件侧已安全读取`device-config.json`，不要再输出或传输其中凭据。运行状态查看该目录`state.json`或脚本status。
 
-当前阶段：**四轮运动联测均触发保护中止；保持网关监听，不重跑、不回中，等待设备侧进一步分析。**
+当前阶段：**HeadFollower修复固件的第五轮10个运动阶段全部通过，最终清理完成，网关保持监听，不再自动动作。**
+`hardware-motion-follower-results.json`记录六个单轴步骤、停顿摇头/点头、运动中打断及软件回零。
+限位±5°、目标±3°、最高10°/s、容差1.5°及既有时间参数不变；没有操作USB/EEPROM或真实模型。
+新增打断真实性检查：先读baseline，600ms开始采样，最迟1200ms须观察到至少0.25°变化，否则未验证并停止。
+本轮实测回执返回后约700ms时yaw从-1.3°变为0°，观察到约1.3°运动后打断；
+命令fresh cancelled，经过3000ms后续帧时点仍稳定，未把accepted当成正在运动。
+软件回零fresh completed，最终真实pose为yaw0°/pitch约-0.9°，处于1.5°容差内，不声称机械绝对零误差。
+中性/熄灯fresh completed，语音/控制释放；独立`hardware-motion-follower-final-readonly.json`确认
+online/fresh=true、simulated=false且无活动命令，前四轮原报告哈希未变。
+新增真假运动打断保护的4项纯模拟回归通过。本轮不代表真实模型/手机语音的组合验收。
+
+以下四轮失败记录保留供追溯：
 第四轮经设备侧明确通知，在舍入修复固件boot=`esp32_9cdc77a2_b6f7843c`上通过WSS执行相同测试。
 `hardware-motion-rounding-results.json`记录首个yaw+3/pitch0再次真实failed/MOTION_TIMEOUT，
 partial_applied=true，立即stop并中止全部后续head，没有调整参数或操作USB。

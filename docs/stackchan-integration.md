@@ -180,6 +180,15 @@ active_command_id为空；不能将这个稍后姿态当作故障时瞬时值。
 独立`hardware-motion-rounding-final-readonly.json`记录终态yaw约1.9°/pitch约-1.6°，
 online/fresh=true、simulated=false且无活动命令；起始和途中样本也是该姿态。
 前三轮原报告哈希不变，仍不据停止后样本推定故障时瞬时姿态，不自动重跑。
+
+HeadFollower修复经设备侧明确通知后，第五轮相同参数10个阶段全部通过，原始记录
+`hardware-motion-follower-results.json`，包括六个单轴步骤、停顿摇头/点头、运动中打断及软件回零。
+本轮补充打断真实性门槛：下发前baseline，600ms采样，最迟1200ms观察到至少0.25°变化后才打断；
+若未观察到则记MOTION_IN_PROGRESS_UNVERIFIED并停止，不把命令接纳视为运动证据。
+实际约700ms观察yaw变化1.3°，随后fresh cancelled，3000ms后续帧未执行且姿态稳定。
+回软件零位取得fresh completed，真实终态yaw0°/pitch约-0.9°，满足1.5°容差；
+中性/熄灯completed、控制释放。独立`hardware-motion-follower-final-readonly.json`确认无活动命令，
+前四轮原报告哈希保持不变。仅模拟Qwen+真实设备WSS，不代表真实语音/模型组合验收。
 本机网关保持监听，没有真实麦克风、付费模型或摄像头视觉验收。
 
 ### 日志
