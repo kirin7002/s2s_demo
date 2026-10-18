@@ -13,6 +13,9 @@ IP 与端口是否能通过当前云侧入口，必须由设备实测，不能�
 `Host: s2s.kirinxu.cn` 与 `tls_server_name s2s.kirinxu.cn`，验证上游公有证书。
 其他路径一律404，管理API关闭、无HTTP重定向或HTTP/3端口。
 原 S2S 继续检查设备 token 和无浏览器 Origin，模型Key、演示口令不进入侧车。
+版本检查、配置预检和正式侧车均显式调用`/usr/bin/caddy`，使用相同UID0与权限配置：
+drop ALL后只保留`NET_BIND_SERVICE`，兼容镜像二进制的file capability；启用no-new-privileges。
+预检仅在服务器私密临时目录复制CA供同权限验证容器读取，完成即清理，不导出私钥。
 
 独立私有CA的根与私钥位于服务器 `shared/device-ip-entry/ca/`；私钥不导出。
 公共根导出为 `shared/device-ip-root-ca.pem`，固件配置为

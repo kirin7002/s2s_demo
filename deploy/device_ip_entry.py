@@ -7,10 +7,12 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shutil
 import socket
 import ssl
 import subprocess
 import sys
+import tempfile
 import time
 
 sys.dont_write_bytecode = True
@@ -20,6 +22,8 @@ NAME = 's2s-device-ip'
 PROJECT = 's2s_demo_device_ip'
 IP = '47.116.102.49'
 PORT = 8443
+SECURITY = ['--user', '0:0', '--cap-drop', 'ALL', '--cap-add', 'NET_BIND_SERVICE',
+            '--security-opt', 'no-new-privileges:true', '--read-only']
 
 
 class EntryError(Exception):
@@ -73,7 +77,7 @@ def preflight(release):
     if not re.fullmatch(r'sha256:[0-9a-f]{64}', image):
         raise EntryError('Expected immutable existing Caddy image ID')
     version = docker('run', '--rm', '--pull=never', '--network', 'none',
-                     '--entrypoint', '/usr/bin/caddy', image, 'version').decode()
+                     '--entrypoint', '/usr/bin/caddy', *SECURITY, image, 'version').decode()
     match = re.search(r'v\d+\.\d+\.\d+', version)
     if not match:
         raise EntryError('Caddy version unavailable')
@@ -113,17 +117,20 @@ def preflight(release):
             or env.get('S2S_ORIGIN') != 'https://s2s.kirinxu.cn'):
         raise EntryError('Device identity, CA or original gateway origin differs')
     # Validate against the exact installed image without touching main Caddy.
-    uid, gid = (ca / 'root.key').stat().st_uid, (ca / 'root.key').stat().st_gid
     print('checking_isolated_caddy_configuration=true', flush=True)
-    docker('run', '--rm', '--pull=never', '--network', 'none', '--entrypoint', '/usr/bin/caddy',
-           '--user', str(uid) + ':' + str(gid),
-           '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true', '--read-only',
-           '--tmpfs', '/data:rw,noexec,nosuid,size=16m,uid=' + str(uid) + ',gid=' + str(gid) + ',mode=0700',
-           '--tmpfs', '/config:rw,noexec,nosuid,size=4m,uid=' + str(uid) + ',gid=' + str(gid) + ',mode=0700',
-           '--tmpfs', '/tmp:rw,noexec,nosuid,size=4m',
-           '--mount', 'type=bind,src=' + str(ca) + ',dst=/ca,readonly',
-           '--mount', 'type=bind,src=' + str(release / 'device-ip.Caddyfile') + ',dst=/etc/caddy/Caddyfile,readonly',
-           image, 'validate', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile')
+    # Same runtime UID/capabilities, without changing persistent CA in check mode.
+    with tempfile.TemporaryDirectory(prefix='s2s-ip-ca-check-') as directory:
+        snapshot = Path(directory)
+        for name in ('root.crt', 'root.key'):
+            shutil.copyfile(ca / name, snapshot / name)
+            os.chmod(snapshot / name, 0o600)
+        docker('run', '--rm', '--pull=never', '--network', 'none', '--entrypoint', '/usr/bin/caddy',
+               *SECURITY, '--tmpfs', '/data:rw,noexec,nosuid,size=16m,mode=0700',
+               '--tmpfs', '/config:rw,noexec,nosuid,size=4m,mode=0700',
+               '--tmpfs', '/tmp:rw,noexec,nosuid,size=4m',
+               '--mount', 'type=bind,src=' + str(snapshot) + ',dst=/ca,readonly',
+               '--mount', 'type=bind,src=' + str(release / 'device-ip.Caddyfile') + ',dst=/etc/caddy/Caddyfile,readonly',
+               image, 'validate', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile')
     print('exact_existing_caddy_image_and_config_verified=true', flush=True)
     return {'revision': revision, 'image': image, 'network': networks[0], 'current': current,
             'root': root, 'token': device['device_token']}
@@ -134,8 +141,7 @@ def launch_args(release, plan):
             '--name', NAME, '--label', 'com.kirin.project=' + PROJECT,
             '--label', 'com.kirin.ip_entry_revision=' + plan['revision'],
             '--network', plan['network'], '--publish', '0.0.0.0:8443:8443/tcp',
-            '--restart', 'unless-stopped', '--user', '0:0', '--read-only', '--cap-drop', 'ALL',
-            '--security-opt', 'no-new-privileges:true', '--pids-limit', '64', '--memory', '128m',
+            '--restart', 'unless-stopped', *SECURITY, '--pids-limit', '64', '--memory', '128m',
             '--cpus', '0.5', '--tmpfs', '/tmp:rw,noexec,nosuid,size=8m']
     for source, target, readonly in [(release / 'device-ip.Caddyfile', '/etc/caddy/Caddyfile', True),
                                      (SHARED / 'ca', '/ca', True), (SHARED / 'data', '/data', False),
