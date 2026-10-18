@@ -8,6 +8,7 @@
 使用根目录`.env`的`S2S_DEMO_PASSWORD`登录，在页面关联StackChan，再点击接通并允许麦克风。
 设备仍以可信WSS连接`kirindeMacBook-Air.local:8443`，两个入口共享同一DeviceHub与授权控制，
 各自精确校验Origin。`http://127.0.0.1:8080`不是此入口的配置Origin，请使用完整localhost链接。
+电脑入口同时精确校验`Host: localhost:8080`；错误Host或WS Origin返回403，同源未登录WS返回401。
 当前进程由`.venv/bin/python scripts/serve_s2s_tls.py`启动；不要再运行下文基础模式命令争用8080。
 正常会话/协议限制、鉴权和停止保护保留，临时只读/±3°/90秒测试配置已移除。
 只读诊断：`.venv/bin/python scripts/s2s_status.py --op get_state`，无需模型调用。

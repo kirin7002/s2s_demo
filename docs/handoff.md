@@ -10,6 +10,7 @@
 `scripts/serve_s2s_tls.py`一个进程同时监听127.0.0.1:8080的电脑HTTP和0.0.0.0:8443的设备TLS，
 两个Web app共享同一个DeviceHub、登录/绑定/控制状态，各自保留精确Origin与相应Cookie策略；不要另启第二个网关。
 电脑浏览器已确认安全上下文、mediaDevices存在、登录/chat/退出200、异源403，不需安装全局CA。
+localhost入口额外精确校验Host=localhost:8080，错误Host403；WS错误Origin403、同源未登录401，均未连接模型。
 尚未请求真实电脑麦克风，也没有在本轮接通模型或发动作，等待用户真实登录/关联/接通。
 实际设备已上线并公布yaw±60°、pitch±25°、max_speed30°/s、tolerance1.5°；read_only=false、test_max=None。
 本机使用根目录.env的S2S_DEMO_PASSWORD，不使用旧hardware随机测试口令。

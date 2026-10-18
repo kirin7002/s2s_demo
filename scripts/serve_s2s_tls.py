@@ -31,6 +31,13 @@ from scripts.stackchan_hardware import private_json, private_write
 DEFAULT_DIRECTORY = ROOT / '.run/s2s-live'
 
 
+@web.middleware
+async def localhost_host_guard(request, handler):
+    if request.headers.get('Host', '').lower() != 'localhost:8080':
+        raise web.HTTPForbidden(text='Local host rejected')
+    return await handler(request)
+
+
 class TrackedProvider:
     def __init__(self, socket, runtime):
         self.socket, self.runtime = socket, runtime
@@ -111,6 +118,7 @@ class Runtime:
         self.hub = self.app[DEVICES]
         self.local_origin = 'http://localhost:8080'
         self.local_app = create_app(replace(self.config, origin=self.local_origin), connector=self.connect)
+        self.local_app.middlewares.append(localhost_host_guard)
         # One device/controller and one account/session store. Separate origins
         # retain exact CSRF/WS checks and the appropriate Secure cookie policy.
         for key in (ACTIVE, ATTEMPTS, DEVICES, LOGINS, OWNERS):
