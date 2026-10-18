@@ -161,6 +161,7 @@ class HardwareHarness:
         self.models = []
         self.voice, self.http, self.reader = None, None, None
         self.voice_events = {}
+        self.connection_events = []
         self.operation = asyncio.Lock()
         self.shutdown = asyncio.Event()
         # Explicit Config: no env file and no real model credentials.
@@ -171,6 +172,38 @@ class HardwareHarness:
                                 stackchan_device_token=config['device_token'])
         self.app = create_app(gateway_config, connector=self.connect_mock)
         self.hub = self.app[DEVICES]
+        self.app.on_response_prepare.append(self.observe_response)
+
+    def observe(self, stage, peer=None, **fields):
+        # Deliberately omit request headers, URLs, bodies and exception text.
+        address = peer[0] if isinstance(peer, tuple) and peer else peer
+        try:
+            address = str(ipaddress.ip_address(address)) if address else None
+        except ValueError:
+            address = None
+        self.connection_events.append({'at_unix': round(time.time(), 3), 'stage': stage,
+                                       'peer_ip': address, **fields})
+        self.connection_events = self.connection_events[-32:]
+
+    async def observe_response(self, request, response):
+        if request.path == '/device/v1/ws':
+            self.observe('device_http_response', request.remote, http_status=response.status)
+
+    def transport_error(self, loop, context):
+        error = context.get('exception')
+        transport = context.get('transport')
+        peer = transport.get_extra_info('peername') if transport else None
+        if isinstance(error, ssl.SSLError):
+            category = 'TLS_HANDSHAKE_FAILED'
+            reason = getattr(error, 'reason', '')
+            if reason in {'TLSV1_ALERT_UNKNOWN_CA', 'SSLV3_ALERT_BAD_CERTIFICATE',
+                          'SSLV3_ALERT_CERTIFICATE_EXPIRED', 'TLSV1_ALERT_CERTIFICATE_UNKNOWN'}:
+                category = 'CLIENT_REJECTED_CERTIFICATE'
+        elif isinstance(error, ConnectionResetError):
+            category = 'PEER_CLOSED_DURING_HANDSHAKE'
+        else:
+            category = 'LOCAL_TRANSPORT_ERROR'
+        self.observe('transport_error', peer, category=category)
 
     async def connect_mock(self):
         model = MockQwen()
@@ -189,6 +222,9 @@ class HardwareHarness:
                 'head': head if isinstance(head, dict) else {},
                 'command_count': len(self.hub.records),
                 'model_session_count': len(self.models),
+                'voice_session_active': bool(self.voice and not self.voice.closed),
+                'control_session_active': self.hub.control is not None,
+                'connection_events': self.connection_events,
                 'voice_events': self.voice_events, 'uptime_seconds': round(time.monotonic() - self.started)}
 
     async def persist(self):
@@ -338,6 +374,12 @@ class HardwareHarness:
         tls.load_cert_chain(self.config['server_certificate_file'], self.config['server_private_key_file'])
         runner = web.AppRunner(self.app, access_log=None)
         await runner.setup()
+        loop = asyncio.get_running_loop()
+        previous_debug, previous_handler = loop.get_debug(), loop.get_exception_handler()
+        # asyncio reports failures before the HTTP layer only in debug mode.
+        # Our handler saves a fixed classification rather than raw TLS errors.
+        loop.set_debug(True)
+        loop.set_exception_handler(self.transport_error)
         control = None
         persist = None
         try:
@@ -350,7 +392,6 @@ class HardwareHarness:
             socket_path.chmod(0o600)
             persist = asyncio.create_task(self.persist())
             print('Local TLS hardware gateway listening; motion gated; no model provider network.', flush=True)
-            loop = asyncio.get_running_loop()
             if install_signals:
                 for sig in (signal.SIGINT, signal.SIGTERM):
                     loop.add_signal_handler(sig, self.shutdown.set)
@@ -366,6 +407,8 @@ class HardwareHarness:
             await self.close_voice()
             await runner.cleanup()
             private_json(self.config['state_file'], {**self.status(), 'stopped': True})
+            loop.set_debug(previous_debug)
+            loop.set_exception_handler(previous_handler)
 
 
 async def request_local(config, request):

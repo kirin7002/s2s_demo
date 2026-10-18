@@ -137,4 +137,12 @@ USB只读舵机探测期间只使用`status`，等待设备侧报告结束；不
 已通过LAN/回环地址的CA与主机名验证、未信任CA拒绝、私密文件权限、登录/绑定/四工具注册、
 含head调用拒绝自检。另4项隔离TLS回归验证上述边界，以及禁动时屏幕/灯光/stop可经过真实工具链；
 其中设备为合成fixture，明确返回`simulated=true`，不是K151的硬件验收结果。
-真机连接后的读状态、屏幕灯光和路由测试待USB探测结束；舵机动作继续等待设备侧确认。
+之后已收到设备侧明确开始通知，实际运行`verify_stackchan_hardware.py --run`，20项禁动真机检查全部通过，
+包含真实能力、7表情、中文、RGB四色、带停顿组合序列、provider call_id去重、BUSY与stop、
+手动/模拟VAD打断、失联拒绝不排队、重连旧历史unknown及重连后执行。全部含设备反馈的证据为simulated=false。
+没有head帧，没有启用servo_ready；原始设备帧重放/过期拒绝不在本次硬件结果覆盖范围内。
+最终恢复中性表情和熄灯取得fresh completed。首次关闭后立即检查得到control_released=false，
+后续独立只读查询实际voice_session_active=false、control_session_active=false。
+原报告不变；独立`.run/stackchan-hardware/hardware-no-head-final-verification.json`保留原哈希、首次快照及后续状态。
+脚本已修正为等待异步清理完成后再记录释放结果。本轮结束保持TLS网关运行，不再创建语音会话或下发动作。
+舵机反馈异常仍未解决，舵机测试尚未开始；没有真实麦克风、付费模型或摄像头视觉验收。

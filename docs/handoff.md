@@ -12,12 +12,18 @@
 私密配置、临时CA/服务器私钥及状态仅在已忽略的`.run/stackchan-hardware/`，目录0700、文件0600；
 固件侧已安全读取`device-config.json`，不要再输出或传输其中凭据。运行状态查看该目录`state.json`或脚本status。
 
-当前阶段：**保持监听，等待设备侧完成USB只读servo_probe并报告。不要开启语音控制会话或下发perform。**
-此前登录/绑定/四工具注册预检已关闭，设备命令数0；状态中的model_session_count为累计已关闭模拟会话数。
-屏幕/灯光/查询/stop不要求舵机就绪，但须等USB探测结束再联测；所有包含head的命令继续禁用，
+当前阶段：**已按设备侧开始指令完成禁动真机20项检查，20通过、0失败，保持监听且不再下发命令。**
+真实WSS已确认HTTP101、peer=192.168.31.112、simulated=false；设备修正了认证头重复CRLF。
+检查覆盖7表情、中文、RGB、停顿、stop、provider call_id去重、BUSY、手动/模拟VAD打断及断线重连。
+测试使用进程内模拟Qwen，回执来自真实设备；未用摄像头验收视觉效果，也未声称覆盖原始设备帧重放。
+结束中性表情/熄灯已有fresh completed回执，后续只读状态确认voice/control均无活动会话。
+原`.run/stackchan-hardware/hardware-no-head-results.json`保留首次关闭后的`control_released=false`快照不变；
+独立`hardware-no-head-final-verification.json`记录后续实际状态、复核时间和原报告哈希。首次观察先于异步清理完成，
+不能把原false改写为一次测试通过。测试脚本已增加等待实际清理结束的逻辑。
+所有包含head的命令继续禁用，
 只有设备侧明确确认且真实设备已启用/标定后才能解锁，测试额外限制±5°。
 已通过LAN/回环TLS及CA/主机名、私密权限、禁动门槛自检，另28项隔离TLS/StackChan回归通过。
-没有操作USB、改变Wi-Fi NVS或部署线上；设备IP由对方报告为192.168.31.112，尚待实际WSS连接。
+没有操作USB、改变Wi-Fi NVS或部署线上；舵机原始反馈异常尚未解决，不能宣布servo-ready。
 启动及控制入口详见[接入文档](stackchan-integration.md)。以下是此前首版集成和部署的历史状态。
 
 产品定位已调整为个人助理 Agent，定位提交`7e558d4`保存在本地。随后按用户批准完成StackChan网关首版：
