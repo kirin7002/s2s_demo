@@ -37,6 +37,10 @@ Memory Hub仍无运行时实现、数据库、同步或离线任务，MCP留作�
 也不能把模拟执行当作真实机器人动作。实现与配置见[StackChan接入约定](stackchan-integration.md)。
 
 Audio工具声明使用`session.update.session.tools[].function`，只在授权绑定会话注册。
+`perform_targets`在正常语音中注册由canonical字段规则生成的扁平模型schema，
+`gateway/target_interface.py`将其转换为原嵌套目标后，再经过canonical校验和时序编译；设备wire不变。
+表达式与屏幕文字互斥，RGB与亮度需同时给出，省略轴沿用新鲜姿态或上一目标；没有预置手势。
+独立`hold_ms`步骤仅向前一目标追加停顿，不重复派发目标，首步停顿明确拒绝。
 协调器只接受`response.function_call_arguments.done`的完整参数，等待原`response.done`确认成功结束后，
 按`output_index`串行执行，再以`conversation.item.create/function_call_output`逐项回填。
 所有结果结算、当前响应仍有效且用户没有开始说话时，最多发送一次`response.create`。

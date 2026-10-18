@@ -215,6 +215,10 @@ class ContractTests(unittest.TestCase):
         self.assertEqual({tool['function']['name'] for tool in tools['tools']}, {
             'stackchan_get_state', 'stackchan_perform_targets', 'stackchan_get_command', 'stackchan_stop'})
         self.assertEqual(len(QWEN_TOOLS), 5)
+        target = next(t['function'] for t in tools['tools'] if t['function']['name'] == 'stackchan_perform_targets')
+        fields = target['parameters']['properties']['steps']['items']['properties']
+        self.assertEqual(set(fields), {'yaw_deg', 'pitch_deg', 'expression', 'text', 'rgb', 'brightness', 'hold_ms'})
+        self.assertNotIn('head', fields)
         self.assertIn('模拟', tools['instructions'])
         for text in ('stackchan_perform_targets', 'return_to_neutral=true', '不计算速度', '20个中文字符', '不可猜成锁定'):
             self.assertIn(text, tools['instructions'])
@@ -396,6 +400,49 @@ class DeviceGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(queried['inherited_axes'], result['inherited_axes'])
         self.assertTrue(queried['input_normalized'])
         self.assertEqual(args, saved)
+
+    async def test_flat_targets_and_standalone_pause_share_one_real_dispatch_path(self):
+        self.device.pose = {'yaw_deg': 6, 'pitch_deg': 7}
+        args = {'steps': [{'yaw_deg': 12, 'expression': 'happy', 'rgb': [0, 255, 0], 'brightness': .2},
+                          {'hold_ms': 1000}, {'pitch_deg': 2}]}
+        saved = copy.deepcopy(args)
+        result = await self.control.execute('stackchan_perform_targets', args)
+        self.assertEqual(result['status'], 'accepted')
+        self.assertEqual(result['input_step_mapping'], [0, 0, 1])
+        self.assertEqual(result['flat_step_indices'], [0, 2])
+        self.assertEqual(result['source_input_steps'], 3)
+        self.assertEqual(result['normalizations'], ['flatten_target_fields', 'merge_hold_steps'])
+        commands = [e for e in self.device.events if e['type'] == 'command.execute']
+        self.assertEqual(len(commands), 1)
+        first, second = commands[0]['args']['frames']
+        self.assertEqual(first['screen'], {'page': 'face', 'expression': 'happy'})
+        self.assertEqual(first['light']['rgb'], [0, 255, 0])
+        self.assertEqual((first['head']['yaw_deg'], first['head']['pitch_deg']), (12, 7))
+        self.assertEqual((second['head']['yaw_deg'], second['head']['pitch_deg']), (12, 2))
+        self.assertEqual(second['at_ms'] - first['head']['move_ms'], 1000)
+        record = self.hub.records[result['command_id']]
+        self.assertEqual(record['requested_summary']['step_count'], 3)
+        self.assertEqual(record['compiled_target_summary']['step_count'], 2)
+        self.assertEqual(record['compiled_target_summary']['steps'][0]['hold_ms'], 1000)
+        self.assertEqual(record['effective_args'], commands[0]['args'])
+        await self.device.status(commands[0], 'completed')
+        await until(lambda: record['status'] == 'completed')
+        queried = await self.control.execute('stackchan_get_command', {'command_id': result['command_id']})
+        self.assertEqual(queried['merged_holds'], result['merged_holds'])
+        self.assertEqual(queried['status'], 'completed')
+        self.assertEqual(args, saved)
+
+    async def test_flat_format_conflicts_and_overbudget_pause_are_atomic_rejections(self):
+        cases = [({'steps': [{'hold_ms': 1000}]}, 'INVALID_ARGUMENT'),
+                 ({'steps': [{'expression': 'happy', 'text': 'private-content'}]}, 'INVALID_ARGUMENT'),
+                 ({'steps': [{'rgb': [0, 255, 0]}]}, 'INVALID_ARGUMENT'),
+                 ({'steps': [{'expression': 'happy'}, {'hold_ms': 8000}]}, 'OUT_OF_RANGE')]
+        for args, code in cases:
+            with self.subTest(code=code):
+                result = await self.control.execute('stackchan_perform_targets', args)
+                self.assertEqual(result['error_code'], code)
+                self.assertNotIn('private-content', json.dumps(result))
+        self.assertFalse(any(e['type'] == 'command.execute' for e in self.device.events))
 
     async def test_target_json_single_step_decodes_once_without_coercing_unknown_fields(self):
         args = {'steps': '{"head":{"pitch_deg":3}}'}
@@ -1015,6 +1062,40 @@ class ToolCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.response([('stackchan_perform_targets', '{}')], identifier='r2')
         await self.tools.responses['r2'].task
         self.assertTrue(self.results()[-1]['retryable'])
+
+    async def test_fast_new_turn_waits_for_interruption_fence_confirmation(self):
+        confirmed = asyncio.Event()
+        async def confirm():
+            await confirmed.wait()
+        self.control.confirm = confirm
+        self.tools.handle({'type': 'input_audio_buffer.speech_started'})
+        self.tools.invalidate()
+        self.tools.handle({'type': 'input_audio_buffer.speech_stopped'})
+        self.response([('stackchan_perform_targets', '{}')])
+        await asyncio.sleep(.01)
+        self.assertFalse(self.control.calls)
+        confirmed.set()
+        await self.tools.responses['r1'].task
+        self.assertEqual(len(self.control.calls), 1)
+        self.assertEqual(sum(e['type'] == 'response.create' for e in self.output), 1)
+
+    async def test_cancelling_response_waiting_on_fence_does_not_cancel_stopping(self):
+        confirmed = asyncio.Event()
+        async def confirm():
+            await confirmed.wait()
+        self.control.confirm = confirm
+        self.tools.invalidate()
+        fence = next(iter(self.tools.fences))
+        self.response([('stackchan_perform_targets', '{}')])
+        await asyncio.sleep(.01)
+        self.tools.invalidate()
+        await asyncio.sleep(.01)
+        self.assertFalse(fence.done())
+        self.assertFalse(self.control.calls)
+        confirmed.set()
+        await asyncio.gather(self.tools.responses['r1'].task, *list(self.tools.fences), return_exceptions=True)
+        self.assertFalse(fence.cancelled())
+        self.assertFalse(self.output)
 
     async def test_error_diagnostics_are_separate_from_spoken_output(self):
         diagnostics = []

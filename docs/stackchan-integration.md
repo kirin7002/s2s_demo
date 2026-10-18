@@ -13,6 +13,11 @@
   完整目录另保留`stackchan_perform`兼容路由。自由目标工具只接收steps、pace及return_to_neutral，
   不让模型填写时间轴；代码计算预算、共线中间目标与显式0/0回正，设备继续做20ms插值。
   设备由授权语音会话绑定，模型参数不接受设备ID或凭据。
+  正常语音注册的目标步骤为扁平字段`yaw_deg/pitch_deg/expression/text/rgb/brightness/hold_ms`，
+  字段类型和限值从canonical schema生成。`expression`与`text`互斥，代码推导屏幕page；
+  `rgb`和`brightness`成对提供，代码组合light；姿态轴按原规则继承。完整目录及旧嵌套调用继续兼容。
+  独立`hold_ms`步骤向前一目标累加停顿，不增加动作或wire帧；首步只有停顿、冲突字段及超预算整体拒绝。
+  原步骤索引、合并停顿及编译后目标分别审计，不改变自由目标或默认添加回正。
   目标调用边界仅适配两种明确格式：单个step对象包装成数组，或严格JSON数组/单step对象字符串解码一层。
   随后仍按目标schema校验，未知字段、重复JSON键、非有限数字和其他形状均拒绝；不解析Python表达式。
   head至少明确一个轴，缺轴从新鲜实际姿态或上一目标继承，不补0；显式回正仍是0/0。
@@ -96,15 +101,15 @@ cd /Users/kirin/go_path/s2s_demo
 使用另一仓库已经编译的**相同C++固件控制核心**端到端检查：
 
 ```sh
-.venv/bin/python /Users/kirin/Documents/ChatGPT/stackchan-wall-e/scripts/verify_s2s.py \
-  --s2s-project /Users/kirin/go_path/s2s_demo
+.venv/bin/python scripts/verify_target_interface.py \
+  --device-project /Users/kirin/Documents/ChatGPT/stackchan-wall-e
 ```
 
 该入口内部创建临时本机网关、模拟Qwen和合成设备凭据，不读取项目.env或真实API Key；
 退出时关闭全部本轮连接。模拟器二进制需先由StackChan仓库构建`firmware/.pio/build/simulator/program`，
-不会使用native测试程序代替。最终11项检查已通过：登录绑定、工具注册、能力查询、accepted、
-执行中音频转发、stop→perform与旧命令cancelled、fresh完成查询、断线拒绝、重连旧历史unknown，
-以及模拟标记贯穿工具结果、真实单调时钟下多帧点头完成。
+不会使用native测试程序代替。该入口验证扁平模型schema注册、组合目标和独立停顿、
+旧嵌套目标兼容、自由姿态往返和显式回正，检查每例只有一个原子命令且真实单调时钟下C++核心completed；
+首步停顿及超过总时长预算的输入须在派发前拒绝。脚本模型只用于协议测试，不证明真实模型决策正确率。
 S2S自己的故障fixture只注入传输故障，不重复实现固件调度。
 真实手机、物理机器人、可信公网WSS和真实模型的组合仍未验证，不能用这些本机结果代替。
 

@@ -94,6 +94,8 @@ node --test tests/test_capture.js
 StackChan配置完成后，登录用户须在通话页主动关联唯一配置设备，下次语音会话才注册
 `get_state`、`perform_targets`、`get_command`、`stop`四个工具（统一`stackchan_`前缀）。
 模型只生成自由姿态/表情/灯光目标，代码计算时序与中间目标，设备做20ms轨迹插值。
+正常语音的目标步骤使用扁平字段`yaw_deg/pitch_deg/expression/text/rgb/brightness/hold_ms`，
+代码生成协议包装；独立停顿步骤合并到前一目标，首步只有停顿则拒绝。旧嵌套调用继续兼容。
 完整目录另保留低层`perform`的auto/strict时序接口，正常语音不注册该接口。
 未关联时模型没有设备工具。一个语音会话独占动作控制，其他会话收到`DEVICE_BUSY`，不抢占。
 设备主动连接`/device/v1/ws`，公网须经可信TLS反代使用WSS；本轮没有部署该版本或调整反代。

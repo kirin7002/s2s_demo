@@ -196,6 +196,10 @@ class ToolCalls:
     async def execute(self, response):
         try:
             async with self.serial:
+                if self.fences:
+                    # A fast new response must wait for speech-interruption
+                    # fences. Cancelling that response must not cancel stopping.
+                    await asyncio.shield(asyncio.gather(*list(self.fences), return_exceptions=True))
                 for index in sorted(response.calls):
                     call = response.calls[index]
                     if not self.valid(response):

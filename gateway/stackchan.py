@@ -17,7 +17,7 @@ from jsonschema import Draft7Validator
 from .action_audit import action_summary, json_type, target_summary
 from .timing_planner import plan_timing, TimingPlanError
 from .target_planner import compile_targets
-from .target_input import normalize_target_input
+from .target_interface import normalize_model_targets, target_input_validator, adapt_target_steps
 
 LOGGER = logging.getLogger(__name__)
 
@@ -34,7 +34,8 @@ MOTION_FAULTS = {'MOTION_TIMEOUT', 'SCHEDULER_OVERRUN', 'HARDWARE_ERROR'}
 TIMING_FIELDS = ('timing_mode', 'timing_adjusted', 'requested_duration_ms', 'effective_duration_ms', 'frame_timing',
                  'source_tool', 'planning_mode', 'pace', 'planned_speed_deg_s', 'input_steps', 'generated_frames',
                  'return_to_neutral', 'neutral_frame_added', 'step_frames', 'inherited_axes',
-                 'input_normalized', 'normalizations', 'received_steps_type', 'normalized_steps_type')
+                 'input_normalized', 'normalizations', 'received_steps_type', 'normalized_steps_type',
+                 'source_input_steps', 'input_step_mapping', 'merged_holds', 'flat_step_indices')
 
 
 class DeviceError(Exception):
@@ -130,7 +131,8 @@ def schema_error(errors):
         if error.validator not in {'minimum', 'maximum', 'minItems', 'maxItems'}:
             return DeviceError('INVALID_ARGUMENT', details=schema_details(error))
         if not (path in (['duration_ms'], ['frames'], ['steps'])
-                or len(path) == 4 and path[0] in ('frames', 'steps') and path[2] == 'head'):
+                or len(path) == 4 and path[0] in ('frames', 'steps') and path[2] == 'head'
+                or len(path) == 3 and path[0] == 'steps' and path[2] in ('yaw_deg', 'pitch_deg')):
             return DeviceError('INVALID_ARGUMENT', details=schema_details(error))
         # Values are numeric only; never include screen text in diagnostics.
         if not number(error.instance) and not (path in (['frames'], ['steps']) and isinstance(error.instance, list)):
@@ -458,6 +460,8 @@ class Control:
             LOGGER.warning('s2s_action_audit %s', json.dumps({'stage': 'perform_result',
                 'received_summary': requested_summary,
                 'requested_summary': record.get('requested_summary', requested_summary) if record else requested_summary,
+                **({'compiled_target_summary': record['compiled_target_summary']}
+                   if record and 'compiled_target_summary' in record else {}),
                 'effective_summary': effective_summary,
                 'summary': effective_summary if effective_summary is not None else requested_summary,
                 **{key: result[key] for key in (
@@ -475,13 +479,29 @@ class Control:
             normalization = {}
             if name == 'stackchan_perform_targets':
                 try:
-                    arguments, normalization = normalize_target_input(arguments)
+                    arguments, normalization = normalize_model_targets(arguments)
                 except TimingPlanError as error:
                     raise DeviceError(error.code, details=error.details) from None
+                validator = target_input_validator(validator.schema, arguments)
             errors = list(validator.iter_errors(arguments))
             if errors:
                 raise schema_error(errors) if name in ('stackchan_perform', 'stackchan_perform_targets') else DeviceError(
                     'INVALID_ARGUMENT', details=schema_details(errors[0]))
+            requested_arguments = arguments
+            if name == 'stackchan_perform_targets':
+                try:
+                    arguments, adaptation = adapt_target_steps(arguments)
+                except TimingPlanError as error:
+                    raise DeviceError(error.code, details=error.details) from None
+                normalization.update(adaptation)
+                if adaptation['flat_step_indices']:
+                    normalization['normalizations'].append('flatten_target_fields')
+                if adaptation['merged_holds']:
+                    normalization['normalizations'].append('merge_hold_steps')
+                normalization['input_normalized'] = bool(normalization['normalizations'])
+                errors = list(PARAMETERS[name].iter_errors(arguments))
+                if errors:
+                    raise schema_error(errors)
             # timing_mode is tool-only; byte limits ultimately apply to the full
             # compiled wire envelope, not to the removed tool metadata.
             encode({key: value for key, value in arguments.items() if key != 'timing_mode'})
@@ -582,7 +602,8 @@ class Control:
                       'owner': self.owner, 'status': 'unknown', 'fresh': False, 'partial_applied': False,
                       'observed_at': time.monotonic(), 'ack': future, 'simulated': self.simulated,
                       'has_head': has_head, 'effective_args': copy.deepcopy(effective), **timing,
-                      'requested_summary': target_summary(arguments) if targets else action_summary(arguments),
+                      'requested_summary': target_summary(requested_arguments) if targets else action_summary(arguments),
+                      **({'compiled_target_summary': target_summary(arguments)} if targets else {}),
                       'action_summary': action_summary(effective)}
             self.hub.records[command_id] = record
             try:

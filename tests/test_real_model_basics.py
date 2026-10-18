@@ -19,6 +19,7 @@ class BasicAcceptanceTests(unittest.TestCase):
         invalid = {'error_code': 'INVALID_ARGUMENT',
                    'details': {'reason': 'additionalProperties', 'field': '$', 'misplaced_fields': ['hold_ms']}}
         self.assertTrue(one_parameter_correction([invalid]))
+        self.assertFalse(one_parameter_correction([{**invalid, 'retryable': False}]))
         self.assertFalse(one_parameter_correction([invalid], execution_started=True))
         self.assertFalse(one_parameter_correction([{**invalid, 'command_id': 'already-dispatched'}]))
         self.assertFalse(one_parameter_correction([{'error_code': 'ACK_TIMEOUT', 'command_id': 'unknown'}]))

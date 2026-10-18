@@ -5,6 +5,7 @@ import math
 import re
 from urllib.parse import urlencode
 from .envfile import DEFAULT_ENV_FILE, read_env_file
+from .target_interface import voice_target_tool
 
 
 @dataclass(frozen=True)
@@ -110,13 +111,15 @@ class Config:
         )
         # Normal speech exposes free targets rather than asking Flash to author
         # clocks. The full tool catalog and legacy perform executor remain intact.
-        stackchan_tools = [tool for tool in (stackchan_tools or [])
+        stackchan_tools = [voice_target_tool(tool) for tool in (stackchan_tools or [])
                            if tool.get('function', {}).get('name') != 'stackchan_perform']
         if stackchan_tools and self.is_audio:
             instructions += (
                 "【设备动作】使用stackchan_perform_targets自由选择目标关键帧steps：姿态、表情、灯光与先后顺序。"
                 "不填写at_ms、move_ms或duration_ms，不计算速度、时长或插帧；这些由网关和设备负责。"
                 "steps直接使用JSON数组，不要再编码成字符串。"
+                "每步直接填写yaw_deg、pitch_deg、expression或text、rgb和brightness、hold_ms；不填写head/screen/light/page包装字段。"
+                "可以将独立hold_ms步骤放在目标后，代码会合并停顿；首步不能只有停顿。"
                 "每个step内的输出同时开始，hold_ms表示到位后的停顿；pace可选gentle/normal/brisk。"
                 "设备已绑定在线时，StackChan是个人助理的非语言表达载体，语言与目标动作共同构成自然短回应。"
                 "明确否定、赞同等适合肢体表达的短回应，默认主动规划一次轻量姿态表达："

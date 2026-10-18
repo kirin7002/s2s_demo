@@ -25,6 +25,12 @@ def target_summary(arguments):
             continue
         item = {'step_index': index}
         head, screen, light = step.get('head'), step.get('screen'), step.get('light')
+        if not any(k in step for k in ('head', 'screen', 'light')):
+            item['format'] = 'flat'
+            head = {k: step[k] for k in ('yaw_deg', 'pitch_deg') if k in step}
+            screen = ({'page': 'face', 'expression': step['expression']} if 'expression' in step
+                      else {'page': 'text'} if 'text' in step else None)
+            light = {k: step[k] for k in ('rgb', 'brightness') if k in step}
         if isinstance(head, dict):
             axes = {k: head[k] for k in ('yaw_deg', 'pitch_deg') if finite(head.get(k))}
             if axes:

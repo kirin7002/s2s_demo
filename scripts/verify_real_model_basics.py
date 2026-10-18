@@ -53,7 +53,7 @@ def prior_diagnostic(event, prior_commands):
 
 def one_parameter_correction(errors, *, execution_started=False):
     """One explicit preflight correction; never retry an accepted physical fault."""
-    if execution_started or len(errors) != 1 or errors[0].get('command_id'):
+    if execution_started or len(errors) != 1 or errors[0].get('command_id') or errors[0].get('retryable') is False:
         return False
     error = errors[0]
     details = error.get('details', {})
@@ -61,10 +61,10 @@ def one_parameter_correction(errors, *, execution_started=False):
         return bool(details.get('field')) and details.get('reason') in {
             'type', 'required', 'additionalProperties', 'anyOf', 'oneOf', 'enum', 'const',
             'minimum', 'maximum', 'minItems', 'maxItems', 'minProperties',
-            'minLength', 'maxLength', 'steps_json_encoding'}
+            'minLength', 'maxLength', 'steps_json_encoding', 'hold_without_previous_target', 'mutually_exclusive'}
     return error.get('error_code') == 'OUT_OF_RANGE' and details.get('reason') in {
         'speed', 'target', 'duration', 'frame_count', 'move_duration', 'step_count',
-        'generated_duration', 'generated_frame_count', 'generated_move_duration'}
+        'generated_duration', 'generated_frame_count', 'generated_move_duration', 'merged_hold_duration'}
 
 
 def correction_evidence(audits, diagnostics):
@@ -351,7 +351,8 @@ async def run(args):
                                            'source_tool', 'planning_mode', 'pace', 'planned_speed_deg_s', 'input_steps',
                                            'generated_frames', 'return_to_neutral', 'neutral_frame_added', 'step_frames',
                                            'inherited_axes', 'input_normalized', 'normalizations', 'received_steps_type',
-                                           'normalized_steps_type') if key in e},
+                                           'normalized_steps_type', 'source_input_steps', 'input_step_mapping', 'merged_holds',
+                                           'flat_step_indices') if key in e},
                                        'terminal': terminals.get(e['command_id'])} for e in performed]
                 correction = correction_evidence(audits, result['diagnostics'])
                 if correction['rejection']:
