@@ -164,7 +164,16 @@ USB只读舵机探测期间只使用`status`，等待设备侧报告结束；不
 采样晚于该帧计划move窗口，但早于整条5000ms结束。原报告缺少ACK时间锚点与设备时钟，
 也未记录停止前瞬时命令状态；不能补造completed或把最后hold称作停止后终态。
 独立`hardware-motion-direct-timing-analysis.json`保留原报告哈希和证据缺口。
-用户正在切换Wi-Fi频段，等待设备侧网络稳定通知后只读补证，不重跑、不放宽阈值。
+后续网络恢复补查时设备又离线，旧nod命令返回unknown/fresh=false；记录于
+`hardware-motion-direct-post-stop-readonly.json`，不能把unknown当作取消或完成。
+
+第三轮经设备侧明确通知开始，固件增加move预算内稳定期并修复USB诊断阻塞；
+测试脚本只提高RGB值至同色相255级，brightness仍0.08，其余运动参数与序列未变。
+`hardware-motion-settling-results.json`首个yaw+3/pitch0命令即收到真实failed/MOTION_TIMEOUT，
+partial_applied=true；立即stop，后续运动全部中止，没有回中。中性/熄灯fresh completed，控制释放。
+独立`hardware-motion-settling-final-readonly.json`记录停止后的fresh真实pose：yaw约1.8°、pitch约-1.6°，
+active_command_id为空；不能将这个稍后姿态当作故障时瞬时值。前两轮报告哈希不变。
+当前等待进一步分析，不自动重跑，不改变阈值。
 本机网关保持监听，没有真实麦克风、付费模型或摄像头视觉验收。
 
 ### 日志

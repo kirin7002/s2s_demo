@@ -14,7 +14,14 @@
 私密配置、临时CA/服务器私钥及状态仅在已忽略的`.run/stackchan-hardware/`，目录0700、文件0600；
 固件侧已安全读取`device-config.json`，不要再输出或传输其中凭据。运行状态查看该目录`state.json`或脚本status。
 
-当前阶段：**两轮运动联测均触发保护中止，正在等待用户完成Wi-Fi切换；不重跑、不回中、不下发动作或设备查询。**
+当前阶段：**三轮运动联测均触发保护中止；保持网关监听，不重跑、不回中，等待设备侧进一步分析。**
+第三轮已在设备侧修复USB诊断阻塞、增加预算内稳定期后按明确通知执行，
+结果另存`hardware-motion-settling-results.json`。运动参数未变，仅RGB提高至同色相255级，brightness仍0.08。
+首个yaw+3/pitch0步骤即收到真实`failed/MOTION_TIMEOUT/partial_applied=true`，后续步骤全部中止。
+已stop，中性/熄灯fresh completed，释放控制；没有失败后回中。
+独立`hardware-motion-settling-final-readonly.json`补读online/fresh=true、simulated=false，
+最终yaw约1.8°、pitch约-1.6°，active_command_id为空；这是停止后终态，不是故障瞬时反馈。
+前两轮原报告哈希核对未变。用户已切换5GHz，Bonjour自动重连，无需更换设备配置。
 首次原报告`hardware-motion-results.json`保留`MOTION_TIMEOUT`失败及只读终态，哈希已独立保存。
 固件侧修复双层轨迹后，第二轮`hardware-motion-direct-results.json`中六个单轴步骤和摇头通过；
 点头第三hold实测pitch=-1.9°，超过1.5°容差，本地`FEEDBACK_OUT_OF_TOLERANCE`保护触发，
@@ -22,7 +29,8 @@
 第二轮原报告保持不变；独立`hardware-motion-direct-timing-analysis.json`记录源码时序、采样和证据缺口。
 该hold按ACK返回后4800ms采样，晚于第三帧3400+1200ms计划结束，但早于整条5000ms结束；
 没有保存设备时钟或本地ACK时间锚点，不能重建设备端精确时间，也没有采到停止前瞬时命令状态。
-待设备侧明确通知网络稳定，才补只读最终pose和旧nod命令状态；新连接/会话可能无法查询旧历史。
+第二轮网络恢复后的补查曾遇设备离线，旧nod返回unknown/fresh=false，未取得其停止后姿态；
+独立`hardware-motion-direct-post-stop-readonly.json`保留证据，新连接/会话不能据此确认旧历史。
 运动门槛此前经明确授权已开启，不能写成门槛关闭；最后测试报告voice/control均已释放。
 测试不操作USB、固件或付费模型；不调整±3°、1200ms、10°/s、1.5°等既定条件。
 
