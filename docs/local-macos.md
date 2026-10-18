@@ -2,6 +2,11 @@
 
 准备日期：2026-10-17。项目目录：`/Users/kirin/go_path/s2s_demo`。
 
+常规S2S配置位于此项目根目录`.env`，登录口令为`S2S_DEMO_PASSWORD`；不在聊天中提供或展示秘密。
+另有`.run/stackchan-hardware/`私密目录用于机器人真机联测，包含临时TLS证书、设备凭据及独立测试口令。
+它仍属于同一个仓库，但8443联测入口固定使用模拟模型，不是日常真实语音入口；
+不要拿该目录的`demo_password`替代根目录正式配置。常规本机服务使用下述8080入口，需单独启动。
+
 从 `https://github.com/kirin7002/s2s_demo.git` 的 `main` 新克隆，代码基线为
 `01bfd3e934de8b6d907fc2cfa5fc07046fa3020c`。保持原 Demo 实现；本次只补充启动文档。
 

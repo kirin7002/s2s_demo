@@ -218,6 +218,9 @@ class MockQwen:
 
 class HardwareHarness:
     def __init__(self, config):
+        # These origins contain only scheme, local host and port. Browsers
+        # canonicalize DNS hostnames to lowercase before sending Origin.
+        config = {**config, 'origin': config['origin'].lower()}
         self.config = config
         self.started = time.monotonic()
         self.motion_enabled = False

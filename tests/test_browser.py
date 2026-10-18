@@ -97,6 +97,17 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.h.upstreams), 0)
         await self.released()
 
+    async def test_login_plain_text_rejection_has_readable_error(self):
+        await self.page.goto(str(self.h.client.make_url('/login')))
+        await self.page.wait_for_function("() => !document.getElementById('login-submit').disabled")
+        await self.page.route('**/api/login', lambda route: route.fulfill(
+            status=403, content_type='text/plain', body='synthetic-internal-detail'))
+        await self.page.fill('#password', 'synthetic-input')
+        await self.page.click('#login-submit')
+        await self.page.wait_for_function("() => document.getElementById('login-message').textContent.includes('登录请求被拒绝')")
+        self.assertNotIn('synthetic-internal-detail', await self.page.locator('#login-message').inner_text())
+        self.assertFalse(await self.page.locator('#login-submit').is_disabled())
+
     async def test_cancel_pending_permission_releases_late_stream(self):
         await self.page.evaluate("""async () => {
           window.__lateStream = await navigator.mediaDevices.getUserMedia({audio:true});

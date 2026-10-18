@@ -26,6 +26,7 @@ class HardwareHarnessTests(unittest.IsolatedAsyncioTestCase):
             port = reservation.getsockname()[1]
         config_file = await asyncio.to_thread(prepare, self.root, '127.0.0.1', port)
         self.config = json.loads(config_file.read_text())
+        self.config['origin'] = f'https://Hardware-Test.local:{port}'
         self.h = HardwareHarness(self.config)
         self.server = asyncio.create_task(self.h.serve(install_signals=False))
         await until(lambda: Path(self.config['control_socket']).exists() or self.server.done())
@@ -92,6 +93,17 @@ class HardwareHarnessTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['result'], {'login_and_binding': True, 'registered_tool_count': 4,
                                           'command_count': 0, 'motion_enabled': False})
         self.assertFalse(self.h.motion_enabled)
+
+    async def test_browser_lowercase_origin_logs_in_but_foreign_origin_is_rejected(self):
+        async with self.client.post(self.base + '/api/login', ssl=self.tls,
+                                    headers={'Origin': self.config['origin'].lower()},
+                                    json={'password': self.config['demo_password']}) as response:
+            self.assertEqual(response.status, 200)
+            self.assertTrue((await response.json())['ok'])
+        async with self.client.post(self.base + '/api/login', ssl=self.tls,
+                                    headers={'Origin': 'https://foreign.local'},
+                                    json={'password': self.config['demo_password']}) as response:
+            self.assertEqual(response.status, 403)
 
     async def test_head_request_is_rejected_before_session_or_dispatch(self):
         request = {'op': 'tool', 'calls': [{'name': 'stackchan_perform', 'arguments': {

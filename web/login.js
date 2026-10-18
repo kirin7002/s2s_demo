@@ -19,8 +19,12 @@ form.onsubmit = async event => {
   busy = true; button.disabled = true;
   try {
     const response = await fetch('/api/login', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({password:input.value}), signal: AbortSignal.timeout(10000) });
-    const result = await response.json(); input.value = '';
-    if (!response.ok) throw new Error(result.error || '登录失败，请稍后重试。');
+    const result = response.headers.get('Content-Type')?.includes('application/json') ? await response.json() : null;
+    input.value = '';
+    if (!response.ok) throw new Error(result?.error || (response.status === 403
+      ? '登录请求被拒绝，请使用管理员提供的完整页面地址后重试。'
+      : `登录失败（HTTP ${response.status}），请稍后重试。`));
+    if (result?.ok !== true) throw new Error('登录响应异常，请刷新页面重试。');
     location.replace('/chat');
   } catch (error) { message.textContent = error.message; busy = false; button.disabled = false; }
 };
