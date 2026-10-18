@@ -6,3 +6,5 @@ __pycache__/
 test-results/
 *.pyc
 .run/stackchan-hardware/
+.run/s2s-live/
+.run/s2s-cloud/

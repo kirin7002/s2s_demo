@@ -152,6 +152,37 @@ class DeviceGatewayTests(unittest.IsolatedAsyncioTestCase):
         await self.device.close()
         await self.h.close()
 
+    async def test_read_only_probe_rejects_physical_perform_before_control(self):
+        object.__setattr__(self.h.cfg, 'stackchan_read_only', True)
+        result = await self.control.execute('stackchan_perform', SCENE)
+        self.assertEqual(result['error_code'], 'NOT_READY')
+        self.assertIsNone(self.hub.control)
+        self.assertFalse(self.hub.records)
+
+    async def test_live_test_target_limit_rejects_above_three_degrees(self):
+        object.__setattr__(self.h.cfg, 'stackchan_test_max_deg', 3)
+        scene = {'duration_ms': 1500, 'frames': [{'at_ms': 0,
+                 'head': {'yaw_deg': 3.1, 'pitch_deg': 0, 'move_ms': 1200}}]}
+        result = await self.control.execute('stackchan_perform', scene)
+        self.assertEqual(result['error_code'], 'OUT_OF_RANGE')
+        self.assertIsNone(self.hub.control)
+        self.assertFalse(self.hub.records)
+
+    async def test_action_audit_records_completion_without_screen_text(self):
+        object.__setattr__(self.h.cfg, 'stackchan_audit_enabled', True)
+        scene = {'duration_ms': 200, 'frames': [{'at_ms': 0,
+                 'screen': {'page': 'text', 'text': 'synthetic-private-screen-text'}}]}
+        with self.assertLogs('gateway.stackchan', level='WARNING') as audit:
+            result = await self.control.execute('stackchan_perform', scene)
+            command = next(e for e in self.device.events if e['type'] == 'command.execute')
+            await self.device.status(command, 'completed')
+            await until(lambda: self.hub.records[result['command_id']]['status'] == 'completed')
+        log = '\n'.join(audit.output)
+        self.assertIn('completed', log)
+        self.assertIn('frame_count', log)
+        self.assertNotIn('synthetic-private-screen-text', log)
+        self.assertNotIn(TOKEN, log)
+
     async def test_binding_login_csrf_and_device_auth(self):
         async with ClientSession() as visitor:
             result = await visitor.get(self.h.client.make_url('/api/stackchan'))

@@ -6,6 +6,33 @@
 
 ## 最新状态：2026-10-18
 
+**新增用户授权：已批准少量真实模型联调与必要公网更新；不要再套用下文旧的“禁止真实模型”阶段限制。**
+真实付费测试仅3次连接：一次18秒以内配置/四工具注册检查，两次45秒上限的合成语音闭环，均已结束。
+`.run/s2s-live/provider-registration.json`确认Flash接受当前配置并回显4工具；
+`real-audio-readonly.json`确认真实模型自主调用get_state，真实设备online/fresh/simulated=false后返回语音；
+`real-audio-action.json`确认真实模型get_state→perform→两次get_command，最终fresh completed及PCM回传。
+这些输入是Mac离线合成语音，不是用户手机麦克风；未注入函数调用，真实输入转写已匹配测试句。
+早期perform参数只保留哈希，不补造轨迹；后续新增无文本动作摘要（帧数、头部轴范围、move_ms/duration、表情枚举）与终态审计。
+保持个人助理定位，电源读数是带sample_age_ms的缓存，单次百分比不等于精确容量，也不能据旧值判断USB已拔除。
+
+当前本机监听入口改由`scripts/serve_s2s_tls.py --read-only`运行，仍使用原设备TLS地址/CA/凭据，
+但模型与登录凭据来自根目录`.env`。服务仅允许读工具，perform在服务端拒绝；启动本身不连模型。
+旧模拟进程已停，回退可在协调确认空闲后停止真实服务并运行`scripts/stackchan_hardware.py serve`，不能同时启动。
+新只读Unix诊断通道`.run/s2s-live/control.sock`支持status和get_state；快捷命令
+`.venv/bin/python scripts/s2s_status.py --op get_state`直接读设备，不连接模型、不占用控制。
+当前固件侧正在进行180秒只读电池/重启监测，禁止在这段重启网关、发动作或启动模型会话。
+活动设备连接配置为`.run/s2s-live/device-config.json`，公网候选独立配置为`.run/s2s-cloud/device-config.json`，后者尚未激活。
+
+公网`s2s.kirinxu.cn`TLS/登录可用，Chrome实测安全上下文和mediaDevices存在，但无手机授权/录音验证。
+仍运行旧UI/车控定位，`/api/stackchan`404，公开tools=disabled。SSH账号无Docker权限、sudo -n不可用；
+不使用历史聊天密码、不修改无关服务/防火墙、不复制本机模型密钥或登录口令上云。
+`deploy/update_gateway.py`准备仅更新现有S2S容器，沿用云端原登录/模型/反代网络，离线wheel构建，
+加入设备鉴权、±3°服务端测试上限、无文本动作审计；失败自动恢复旧容器，支持显式手动回滚。
+管理员发布包/命令的实际路径见`.run/s2s-cloud/`及部署文档；必须完成管理员更新后再将固件改为公网配置。
+全量本机125项（含Chrome）与JS4项通过，后续新增2项显式回滚保护也通过；未执行线上容器切换或Docker构建。
+
+以下是本次真实模型阶段之前的历史记录：
+
 入口区分：常规S2S通过根目录`.env`配置，演示口令为`S2S_DEMO_PASSWORD`；
 `.run/stackchan-hardware/`属于本仓库内的隔离机器人联测材料，8443为模拟模型测试入口，不能当作真实语音主入口。
 用户浏览器登录时发现Bonjour配置含大写、浏览器Origin转小写引发403；现已在联测入口统一Origin小写，

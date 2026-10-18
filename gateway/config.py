@@ -1,6 +1,7 @@
 """Server-only configuration. Never serialize this object to clients."""
 from dataclasses import dataclass, field
 import os
+import math
 import re
 from urllib.parse import urlencode
 from .envfile import DEFAULT_ENV_FILE, read_env_file
@@ -23,6 +24,9 @@ class Config:
     stackchan_enabled: bool = False
     stackchan_device_id: str = ""
     stackchan_device_token: str = field(default="", repr=False)
+    stackchan_read_only: bool = False
+    stackchan_test_max_deg: float | None = None
+    stackchan_audit_enabled: bool = False
     device_ack_seconds: float = 1.5
     device_keepalive_seconds: float = 10
 
@@ -42,7 +46,10 @@ class Config:
                    origin=get("S2S_ORIGIN", "http://127.0.0.1:8080"),
                    stackchan_enabled=get("S2S_STACKCHAN_ENABLED") == "1",
                    stackchan_device_id=get("S2S_STACKCHAN_DEVICE_ID"),
-                   stackchan_device_token=get("S2S_STACKCHAN_DEVICE_TOKEN"))
+                   stackchan_device_token=get("S2S_STACKCHAN_DEVICE_TOKEN"),
+                   stackchan_test_max_deg=float(get("S2S_STACKCHAN_TEST_MAX_DEG"))
+                       if get("S2S_STACKCHAN_TEST_MAX_DEG") else None,
+                   stackchan_audit_enabled=get("S2S_STACKCHAN_AUDIT") == "1")
 
     @property
     def stackchan_configured(self):
@@ -51,6 +58,9 @@ class Config:
                     and re.fullmatch(r"[A-Za-z0-9_-]{32,256}", self.stackchan_device_token))
 
     def problem(self):
+        if self.stackchan_test_max_deg is not None and (
+                not math.isfinite(self.stackchan_test_max_deg) or not 0 < self.stackchan_test_max_deg <= 60):
+            return "设备测试角度限制无效。"
         if not self.live_enabled:
             return "真实模型连接未启用；本地页面可用。"
         if not self.demo_password:
@@ -101,6 +111,12 @@ class Config:
                              "工具结果simulated=true时明确说明仅为模拟执行，不能声称真实机器人已动作；"
                              "simulated未知时也不能声称真实设备已执行。"
                              "同一设备的动作可先停止再执行，不根据固定话术强制动作。其他外部工具未启用。")
+            instructions += ("电源读数是带sample_age_ms的缓存；单次电量百分比不是精确容量，"
+                             "不能根据未刷新的电源数据推断USB已拔除，需结合用户确认及持续连接验证。")
+            if self.stackchan_read_only:
+                instructions += "当前联调只允许查询状态或命令，不执行perform动作。"
+            if self.stackchan_test_max_deg is not None:
+                instructions += f"当前测试头部两轴绝对目标均不得超过{self.stackchan_test_max_deg:g}度，不提高速度或放宽设备容差。"
         else:
             instructions += "当前会话未启用 StackChan 或其他外部工具，不要声称已操控设备或完成外部操作。"
         if self.is_audio:

@@ -1,5 +1,33 @@
 # 阿里云隔离部署
 
+## 当前StackChan网关更新准备（2026-10-18）
+
+用户已批准真实手机/模型/设备联调及必要更新。现有公网TLS与登录可用，但仍是旧实现：
+`/api/stackchan`404、tools=disabled、个人助理提示词尚未部署。不要将旧站的可访问等同于机器人已接入。
+本机真实Flash已通过四工具注册、合成中文音频→模型自主工具→真实设备→回填→PCM回传；手机真实输入仍待验收。
+
+本次只更换现有`s2s-demo`容器的代码与必要依赖，沿用原云端Key、演示口令、型号、Caddy网络与域名。
+不改Caddy、不加公网端口或管理API、不改防火墙及其他应用。设备独立凭据在
+`/home/kirin/apps/s2s_demo/shared/stackchan-device-config.json`（0600），不包含模型Key或登录口令。
+本机固件侧读取候选配置`.run/s2s-cloud/device-config.json`；仅管理员激活后才能切换固件。
+ISRG Root X1与现有站点主机名已验证；不能关闭设备TLS校验。
+
+`deploy/update_gateway.py --approve-gateway-update`必须由管理员执行。当前SSH用户无法访问Docker socket，
+`sudo -n`也不可用，因此助手无法代执行。准备完成后的**精确一条命令**位于私密目录
+`.run/s2s-cloud/deploy-command.txt`；用户在自己的终端执行并亲自输入sudo密码，禁止使用聊天密码。
+发布包含源码校验清单和Linux Python3.12依赖wheel，复用现有镜像、无网络构建；
+先检查导入，再切换S2S容器，健康失败自动回滚，旧容器保留为`s2s-demo.pre-gateway-<revision前12位>`。
+显式回退使用同一脚本`--rollback-gateway-update`，核验容器身份且保留新容器，不删除未知容器。
+更新命令不主动调用模型或设备。发布后须再次确认公网绑定接口、WSS鉴权及手机安全上下文。
+
+初期服务端额外设置`S2S_STACKCHAN_TEST_MAX_DEG=3`，保持设备±5°/10°s/1.5°；
+`S2S_STACKCHAN_AUDIT=1`只记录帧数、头部轴min/max、move_ms、duration、枚举表情和完成/取消/错误结果。
+不记录屏幕文本、用户语音或凭据。个人助理必须先读当前能力，回执accepted不能当作完成。
+
+手机步骤：打开`https://s2s.kirinxu.cn/login`，使用**原云端演示口令**，关联已配置StackChan设备，再点击接通并允许麦克风。
+先问“查询机器人是否在线”，再在协调确认无人控制后请求小角度动作；设备离线时不尝试补发。
+实际手机输入、扬声器/回声、连续三轮、语音打断、锁屏及网络切换尚未验证，不以合成音频测试替代。
+
 ## 当前已完成：2026-10-18
 
 **入口：https://s2s.kirinxu.cn/login**。可信TLS与登录页/全部前端资源已从公网验证；

@@ -4,6 +4,7 @@ from collections import OrderedDict
 import hashlib
 import hmac
 import json
+import logging
 import math
 from pathlib import Path
 import re
@@ -12,6 +13,9 @@ import time
 
 from aiohttp import WSMsgType, web
 from jsonschema import Draft7Validator
+from .action_audit import action_summary
+
+LOGGER = logging.getLogger(__name__)
 
 CONTRACT = Path(__file__).with_name('stackchan_contract')
 TOOLS = json.loads((CONTRACT / 'tools.json').read_text())['tools']
@@ -208,6 +212,11 @@ class Connection:
                     record['error_code'] = code
                 elif state in ('failed', 'rejected'):
                     record['error_code'] = 'HARDWARE_ERROR'
+            if self.hub.config.stackchan_audit_enabled:
+                LOGGER.warning('s2s_action_audit %s', json.dumps({'stage': 'device_command_status',
+                    'command_id': command_id, 'status': state, 'simulated': record.get('simulated'),
+                    'error_code': record.get('error_code'), 'summary': record.get('action_summary')},
+                    ensure_ascii=False, allow_nan=False))
             future = record.get('ack')
             if future and not future.done() and (state == 'accepted' or state in TERMINAL):
                 future.set_result(self.hub.command_result(record))
@@ -329,6 +338,11 @@ class Control:
         if 'simulated' not in result:
             record = self.hub.records.get(result.get('command_id'))
             result['simulated'] = record['simulated'] if record else self.simulated
+        if name == 'stackchan_perform' and self.hub.config.stackchan_audit_enabled:
+            LOGGER.warning('s2s_action_audit %s', json.dumps({'stage': 'perform_result',
+                'summary': action_summary(arguments), **{key: result[key] for key in (
+                    'command_id', 'status', 'error_code', 'fresh', 'simulated') if key in result}},
+                ensure_ascii=False, allow_nan=False))
         return result
 
     async def _execute(self, name, arguments):
@@ -381,6 +395,14 @@ class Control:
                 result = await self.fence(active=True)
                 result['status'] = 'stopped'
                 return result
+            if self.hub.config.stackchan_read_only:
+                raise DeviceError('NOT_READY')
+            target_limit = self.hub.config.stackchan_test_max_deg
+            if target_limit is not None and any(
+                    abs(item['head'][axis]) > target_limit
+                    for item in arguments['frames'] if 'head' in item
+                    for axis in ('yaw_deg', 'pitch_deg')):
+                raise DeviceError('OUT_OF_RANGE')
             connection = await self.ensure()
             validate_frames(arguments, connection.capabilities)
             command_id, generation = secrets.token_hex(16), self.generation
@@ -393,6 +415,8 @@ class Control:
             record = {**{key: message[key] for key in ('command_id', 'connection_id', 'control_session_id', 'generation')},
                       'owner': self.owner, 'status': 'unknown', 'fresh': False, 'partial_applied': False,
                       'observed_at': time.monotonic(), 'ack': future, 'simulated': self.simulated}
+            if self.hub.config.stackchan_audit_enabled:
+                record['action_summary'] = action_summary(arguments)
             self.hub.records[command_id] = record
             try:
                 await connection.send(message, guard=lambda: self.authorized and self.synced and self.generation == generation)
