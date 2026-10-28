@@ -159,6 +159,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.fill("#password", self.h.cfg.demo_password)
         await self.page.click("#login-submit")
         await self.page.wait_for_url("**/chat")
+        await self.page.click("#connection-toggle")
         await self.page.click("#logout")
         await self.page.wait_for_url("**/login")
 
@@ -169,6 +170,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             object.__setattr__(self.h.cfg, name, value)
         await self.page.reload()
         await self.page.wait_for_function("() => !document.getElementById('device-panel').hidden")
+        await self.page.click('#connection-toggle')
         self.assertIn('离线', await self.page.locator('#device-status').inner_text())
         await self.page.click('#device-bind')
         await self.page.wait_for_function("() => document.getElementById('device-bind').textContent === '取消关联'")
