@@ -23,8 +23,30 @@ function duration(s) {
   el('duration').textContent = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
   el('duration').setAttribute('datetime', `PT${seconds}S`);
 }
+const history = el('transcripts');
+let followLatest = true;
+function historyAtBottom() {
+  return history.scrollHeight - history.scrollTop - history.clientHeight < 48;
+}
+function showLatest() {
+  history.scrollTop = history.scrollHeight;
+  followLatest = true; el('new-messages').hidden = true;
+}
+history.addEventListener('scroll', () => {
+  followLatest = historyAtBottom();
+  if (followLatest) el('new-messages').hidden = true;
+});
+el('new-messages').onclick = showLatest;
+// Preserve the reader's position when the viewport or connection panel changes.
+new ResizeObserver(() => { if (followLatest) showLatest(); }).observe(history);
+el('connection-toggle').onclick = () => {
+  const expanded = el('connection-toggle').getAttribute('aria-expanded') !== 'true';
+  el('connection-toggle').setAttribute('aria-expanded', String(expanded));
+  el('connection-panel').hidden = !expanded;
+};
 function emptyConversation() {
   el('transcripts').replaceChildren(el('empty-transcripts').content.cloneNode(true));
+  showLatest();
 }
 function flush(s) {
   for (const source of s.playing) { source.onended = null; try { source.stop(); } catch {} source.disconnect(); }
@@ -48,6 +70,9 @@ function finish(s, title, detail) {
 }
 function transcript(role, text) {
   if (!text) return;
+  const shouldFollow = followLatest;
+  const previousHeight = history.scrollHeight, previousTop = history.scrollTop;
+  let removedHeight = 0;
   el('transcripts').querySelector('.empty')?.remove();
   let target;
   if (role === 'assistant' && assistant) target = assistant;
@@ -56,10 +81,18 @@ function transcript(role, text) {
     const label = document.createElement('small'); label.textContent = role === 'user' ? '你' : role === 'diagnostic' ? '诊断' : '助手';
     target = document.createElement('span'); row.append(label, target); el('transcripts').append(row);
     if (role === 'assistant') assistant = target;
-    while (el('transcripts').children.length > 100) el('transcripts').firstElementChild.remove();
+    while (history.children.length > 100) {
+      const before = history.scrollHeight;
+      history.firstElementChild.remove();
+      removedHeight += before - history.scrollHeight;
+    }
   }
   target.textContent = (target.textContent + text).slice(-32000);
-  el('transcripts').scrollTop = el('transcripts').scrollHeight;
+  if (shouldFollow) showLatest();
+  else {
+    history.scrollTop = Math.max(0, previousTop - removedHeight);
+    el('new-messages').hidden = history.scrollHeight === previousHeight && historyAtBottom();
+  }
 }
 function play(s, bytes) {
   if (!bytes.byteLength || bytes.byteLength % 2 || s.context.state !== 'running') throw new Error('音频播放不可用，请重新连接。');
